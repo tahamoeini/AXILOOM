@@ -2,7 +2,7 @@ const { createHash } = require('node:crypto');
 
 const { validateNetworkAccess } = require('./jira-providers.cjs');
 
-const CONFIG_SCHEMA_VERSION = 2;
+const CONFIG_SCHEMA_VERSION = 3;
 const SEMANTIC_KEYS = new Set([
   'storyPoints', 'sprint', 'epicLink', 'epicName', 'team', 'workClassification',
   'issueTags', 'requester', 'department', 'productOwner', 'loggedTime',
@@ -177,7 +177,10 @@ function normalizeConfig(input = {}) {
   const calendar = { ...defaults.calendar, ...(isRecord(input.calendar) ? input.calendar : {}) };
   calendar.workingDays = Array.isArray(calendar.workingDays) ? calendar.workingDays.map(Number) : [];
   calendar.holidays = stringList(calendar.holidays, 10);
-  calendar.workIntervals = Array.isArray(calendar.workIntervals) ? calendar.workIntervals : [];
+  calendar.workIntervals = (Array.isArray(calendar.workIntervals) ? calendar.workIntervals : []).filter(isRecord).map((interval) => ({
+    start: asString(interval.start, 5), end: asString(interval.end, 5),
+    ...(Array.isArray(interval.weekdays) ? { weekdays: interval.weekdays.map(Number) } : {}),
+  }));
   const modules = { ...defaults.modules, ...(isRecord(input.modules) ? input.modules : {}) };
   const fieldMappings = (Array.isArray(input.fieldMappings) ? input.fieldMappings : []).filter(isRecord).map((binding) => ({
     semanticKey: asString(binding.semanticKey, 80),
@@ -198,11 +201,27 @@ function normalizeConfig(input = {}) {
     issueTypeId: asString(item.issueTypeId, 80),
     classification: asString(item.classification, 80),
   }));
-  const capacityOverrides = (Array.isArray(input.capacityOverrides) ? input.capacityOverrides : []).filter(isRecord).map((item) => ({
-    team: asString(item.team, 160), sprintId: asString(item.sprintId, 80), assigneeKey: asString(item.assigneeKey, 160), assignee: asString(item.assignee, 200),
-    overrideWorkingDays: item.overrideWorkingDays === null || item.overrideWorkingDays === undefined || item.overrideWorkingDays === '' ? null : Number(item.overrideWorkingDays),
-    allocation: item.allocation === null || item.allocation === undefined || item.allocation === '' ? 1 : Number(item.allocation),
-  }));
+  const capacityOverrides = [];
+  (Array.isArray(input.capacityOverrides) ? input.capacityOverrides : []).filter(isRecord).forEach((item) => {
+    const legacyTeamName = asString(item.team, 160);
+    let teamId = asString(item.teamId, 80);
+    if (!teamId && legacyTeamName) {
+      let team = teamByName.get(legacyTeamName.toLocaleLowerCase());
+      if (!team) {
+        team = { id: stableLegacyTeamId(legacyTeamName), name: legacyTeamName, aliases: [], parentTeamId: '', activeFrom: '', activeTo: '' };
+        teams.push(team);
+        teamById.set(team.id, team);
+        teamByName.set(team.name.toLocaleLowerCase(), team);
+      }
+      teamId = team.id;
+    }
+    capacityOverrides.push({
+      teamId, sprintId: asString(item.sprintId, 80), assigneeKey: asString(item.assigneeKey, 160), assignee: asString(item.assignee, 200),
+      activeFrom: asString(item.activeFrom, 32), activeTo: asString(item.activeTo, 32),
+      overrideWorkingDays: item.overrideWorkingDays === null || item.overrideWorkingDays === undefined || item.overrideWorkingDays === '' ? null : Number(item.overrideWorkingDays),
+      allocation: item.allocation === null || item.allocation === undefined || item.allocation === '' ? 1 : Number(item.allocation),
+    });
+  });
   const next = {
     ...defaults,
     ...input,
@@ -371,13 +390,17 @@ function validateConfig(input) {
       teamLabels.set(normalized, team.id);
     }
   });
-  const capacityOverrideKeys = new Set();
+  const capacityOverrideKeys = [];
   config.capacityOverrides.forEach((item) => {
-    assert(item.team && item.sprintId && item.assigneeKey, 'Capacity overrides need a team, sprint ID, and assignee key.');
-    assert(!config.teams.length || config.teams.some((team) => team.name === item.team), `Capacity override references an unknown team: ${item.team}`);
-    const key = [item.team, item.sprintId, item.assigneeKey].join('|');
-    assert(!capacityOverrideKeys.has(key), `Duplicate capacity override: ${key}`);
-    capacityOverrideKeys.add(key);
+    assert(item.teamId && item.assigneeKey, 'Capacity overrides need a stable team ID and assignee key.');
+    assert(config.teams.some((team) => team.id === item.teamId), `Capacity override references an unknown team ID: ${item.teamId}`);
+    assert(item.sprintId || item.activeFrom || item.activeTo, 'Capacity overrides need a sprint ID or an effective date range.');
+    assertActiveDates(item, `Capacity override for ${item.teamId}`);
+    const duplicate = capacityOverrideKeys.find((existing) => existing.teamId === item.teamId
+      && existing.assigneeKey === item.assigneeKey && (!existing.sprintId || !item.sprintId || existing.sprintId === item.sprintId)
+      && rangesOverlap(existing, item));
+    assert(!duplicate, `Overlapping capacity overrides for ${item.teamId} and ${item.assigneeKey}.`);
+    capacityOverrideKeys.push(item);
     assert(item.overrideWorkingDays === null || Number.isFinite(item.overrideWorkingDays) && item.overrideWorkingDays >= 0 && item.overrideWorkingDays <= 366, 'Override working days must be between 0 and 366.');
     assert(Number.isFinite(item.allocation) && item.allocation >= 0 && item.allocation <= 1, 'Capacity allocation must be between 0 and 1.');
   });
@@ -449,7 +472,24 @@ function validateConfig(input) {
     const start = Number(interval.start.slice(0, 2)) * 60 + Number(interval.start.slice(3));
     const end = Number(interval.end.slice(0, 2)) * 60 + Number(interval.end.slice(3));
     assert(start >= 0 && start < 1440 && end > start && end <= 1440, 'Calendar work interval boundaries are invalid.');
+    if (interval.weekdays !== undefined) {
+      assert(Array.isArray(interval.weekdays) && interval.weekdays.length > 0, 'Calendar work intervals need at least one weekday when scoped.');
+      assert(interval.weekdays.every((day) => Number.isInteger(day) && config.calendar.workingDays.includes(day)), 'Calendar work interval weekdays must be configured working days.');
+      assert(new Set(interval.weekdays).size === interval.weekdays.length, 'Calendar work interval weekdays must be unique.');
+    }
   });
+  for (let leftIndex = 0; leftIndex < config.calendar.workIntervals.length; leftIndex += 1) {
+    const left = config.calendar.workIntervals[leftIndex];
+    const leftStart = Number(left.start.slice(0, 2)) * 60 + Number(left.start.slice(3));
+    const leftEnd = Number(left.end.slice(0, 2)) * 60 + Number(left.end.slice(3));
+    for (const right of config.calendar.workIntervals.slice(leftIndex + 1)) {
+      const rightStart = Number(right.start.slice(0, 2)) * 60 + Number(right.start.slice(3));
+      const rightEnd = Number(right.end.slice(0, 2)) * 60 + Number(right.end.slice(3));
+      const weekdays = (interval) => interval.weekdays || config.calendar.workingDays;
+      const overlapsOnDay = weekdays(left).some((day) => weekdays(right).includes(day));
+      assert(!overlapsOnDay || leftEnd <= rightStart || rightEnd <= leftStart, 'Calendar work intervals must not overlap on the same weekday.');
+    }
+  }
   for (const [scope, workflow] of Object.entries(config.workflows)) {
     const ids = new Set();
     workflow.milestones.forEach((milestone) => {

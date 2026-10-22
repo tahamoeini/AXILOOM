@@ -34,7 +34,7 @@ Unknown, inactive, ambiguous, and conflicting mappings generate distinct quality
 
 ## Capacity and calendar
 
-Working days use the configured time zone, working weekdays, and holidays. Capacity can be overridden by team, sprint, person, working days, and allocation. Story points and hours remain separate measures. The current model does not claim support for every effective-dated allocation or cross-time-zone schedule edge case; see the acceptance record.
+Working time uses the configured time zone, weekday mask, holidays, and daily intervals. Date-only bounds include both local dates; date-time bounds must include an explicit offset and use half-open overlap. Explicit intervals calculate actual elapsed hours across DST and reject nonexistent local-time boundaries. When intervals are omitted, touched partial working dates are counted as full days and the estimate is marked approximate. Person capacity overrides use stable team IDs and can be scoped to a sprint or inclusive effective dates. Assignees without an override default to a full allocation, and the report labels that estimate because the Jira issue set is not an authoritative staffing roster. Missing calendar dates or person allocations leave capacity unavailable with a reason. Story points and hours remain separate measures.
 
 ## Product and portfolio reports
 

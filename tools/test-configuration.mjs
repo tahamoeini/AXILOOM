@@ -13,7 +13,7 @@ assert.deepEqual(DEFAULT_CONFIG.teams, []);
 assert.deepEqual(DEFAULT_CONFIG.fieldMappings, []);
 assert.equal(DEFAULT_CONFIG.calendar.configured, false);
 assert.equal(DEFAULT_CONFIG.modules.businessSprint, false);
-assert.throws(() => validateConfig({ schemaVersion: 3 }), /newer than the supported version 2/,
+assert.throws(() => validateConfig({ schemaVersion: 4 }), /newer than the supported version 3/,
   'profiles from a newer schema must fail instead of being downgraded');
 assert.throws(() => validateConfig({ schemaVersion: 1.5 }), /non-negative integer/,
   'fractional schema versions must fail validation');
@@ -42,13 +42,32 @@ const profile = validateConfig({
   modules: { delivery: true, portfolio: true },
 });
 
-assert.equal(profile.schemaVersion, 2, 'version 1 profiles migrate with private network access as the default');
+assert.equal(profile.schemaVersion, 3, 'version 1 profiles migrate with private network access and current calendar rules');
 assert.deepEqual(profile.sourceInstance.networkAccess, { mode: 'private', approvedAddresses: [] });
 assert.equal(profile.boardRoutes[0].team, 'Platform');
 assert.equal(profile.boardRoutes[0].activeFrom, '', 'legacy board routes remain open-ended after normalization');
 assert.equal(profile.fieldMappings[0].providerFieldId, 'customfield_12345');
 assert.deepEqual(profile.projectRoles.productIntake, ['IDEAS']);
 assert.equal(profile.calendar.timeZone, 'Europe/Berlin');
+const migratedCapacityProfile = validateConfig({
+  schemaVersion: 2,
+  teams: [{ id: 'team-legacy', name: 'Legacy Team', aliases: [] }],
+  capacityOverrides: [{ team: 'Legacy Team', sprintId: '301', assigneeKey: 'person-1', assignee: 'Person One', overrideWorkingDays: null, allocation: 0.5 }],
+});
+assert.deepEqual(migratedCapacityProfile.capacityOverrides[0], {
+  teamId: 'team-legacy', sprintId: '301', assigneeKey: 'person-1', assignee: 'Person One',
+  activeFrom: '', activeTo: '', overrideWorkingDays: null, allocation: 0.5,
+}, 'version 2 team-name capacity overrides migrate to stable team IDs');
+const effectiveCapacityProfile = validateConfig({
+  teams: [{ id: 'team-calendar', name: 'Calendar Team', aliases: [] }],
+  calendar: { configured: true, timeZone: 'Europe/Berlin', workingDays: [1, 2, 3, 4, 5], hoursPerDay: 8, holidays: [], workIntervals: [{ start: '09:00', end: '12:00' }, { start: '13:00', end: '17:00' }] },
+  capacityOverrides: [{ teamId: 'team-calendar', sprintId: '', assigneeKey: 'person-1', assignee: 'Person One', activeFrom: '2026-01-01', activeTo: '2026-06-30', overrideWorkingDays: null, allocation: 0.75 }],
+});
+assert.equal(effectiveCapacityProfile.capacityOverrides[0].activeTo, '2026-06-30');
+assert.throws(() => validateConfig({
+  teams: [{ id: 'team-calendar', name: 'Calendar Team', aliases: [] }],
+  calendar: { configured: true, timeZone: 'UTC', workingDays: [1, 2, 3, 4, 5], hoursPerDay: 8, holidays: [], workIntervals: [{ start: '09:00', end: '12:00' }, { start: '11:00', end: '17:00' }] },
+}), /must not overlap on the same weekday/);
 assert.notEqual(configurationFingerprint(profile), configurationFingerprint({ ...profile, organization: { ...profile.organization, name: 'Another Studio' } }));
 assert.notEqual(configurationFingerprint(profile), configurationFingerprint({ ...profile, sourceInstance: { ...profile.sourceInstance, networkAccess: { mode: 'public-pinned', approvedAddresses: ['8.8.8.8'] } } }));
 assert.equal(sourceIdentityKey(profile), sourceIdentityKey({ ...profile, organization: { ...profile.organization, name: 'Another Studio' } }));

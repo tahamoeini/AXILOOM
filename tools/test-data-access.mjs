@@ -532,11 +532,97 @@ async function main() {
   assert.equal(mixedMetricScope.issueClassMetrics.feature.storyPoints, 3);
   assert.equal(mixedMetricScope.issueClassMetrics.feature.loggedHours, 1);
   assert.equal(mixedMetricScope.issueClassMetrics.defect.storyPoints, null);
+  const overrideCalendar = { configured: true, timeZone: 'UTC', workingDays: [1, 2, 3, 4, 5], holidays: [], workIntervals: [], hoursPerDay: 8 };
+  const effectiveOverrideConfig = {
+    ...metricConfig,
+    calendar: overrideCalendar,
+    capacityOverrides: [{
+      teamId: 'team-plan', sprintId: '', assigneeKey: 'person-1', assignee: 'Person One',
+      activeFrom: '2026-01-01', activeTo: '2026-02-14', overrideWorkingDays: 5.5, allocation: 0.5,
+    }],
+  };
+  const effectiveOverrideMetrics = calculateMetrics([fullyMappedFeature], [planSprint], effectiveOverrideConfig);
+  assert.equal(effectiveOverrideMetrics.sprintMetrics[0].scope.capacityHours, 22,
+    'a stable-team allocation override applies by effective date and fractional working days');
+  assert.equal(effectiveOverrideMetrics.personMetrics[0].scope.capacityHours, 22);
+  const expiredOverrideConfig = {
+    ...effectiveOverrideConfig,
+    capacityOverrides: [{ ...effectiveOverrideConfig.capacityOverrides[0], activeFrom: '2026-03-01', activeTo: '2026-06-30' }],
+  };
+  assert.equal(calculateMetrics([fullyMappedFeature], [planSprint], expiredOverrideConfig).sprintMetrics[0].scope.capacityHours, 80,
+    'expired allocations do not alter earlier sprint capacity');
   const definitions = require('../src/data/metric-definitions.json');
   assert.ok(definitions.every((definition) => definition.formula && definition.caveat && definition.source),
     'each metric definition retains a formula, a caveat, and an evidence source');
   assert.equal(definitions.some((definition) => /\bBug\b|default Done and Review/i.test([definition.title, definition.formula, definition.caveat].join(' '))), false,
     'metric definitions do not impose a Jira issue-type or completion-status taxonomy');
+
+  const calendarConfig = (timeZone, workingDays, holidays = [], workIntervals = []) => ({
+    ...baseMetricConfig,
+    organization: { ...baseMetricConfig.organization, timeZone },
+    teams: [{ id: 'team-calendar', name: 'Calendar Team', aliases: [], parentTeamId: '', activeFrom: '', activeTo: '' }],
+    boardRoutes: [{ boardId: '42', teamId: 'team-calendar', team: 'Calendar Team', activeFrom: '', activeTo: '' }],
+    calendar: { configured: true, timeZone, workingDays, holidays, workIntervals, hoursPerDay: 8 },
+    capacityOverrides: [],
+  });
+  const calendarSprint = (id, startDate, endDate, activatedDate, completeDate) => ({
+    id, name: `Calendar ${id}`, originBoardId: '42', state: 'closed', startDate, endDate, activatedDate, completeDate,
+  });
+  const calendarMetricsFor = (config, sprint) => calculateMetrics([], [sprint], config).sprintMetrics[0];
+  const berlinCalendar = calendarMetricsFor(calendarConfig('Europe/Berlin', [1, 2, 3, 4, 5], ['2026-04-03']), calendarSprint(
+    'berlin-dst', '2026-03-27', '2026-04-06', '2026-03-27T00:00:00.000Z', '2026-04-06T23:00:00.000Z',
+  ));
+  assert.equal(berlinCalendar.workingDays, 6, 'Berlin date-only planned bounds include the end date, cross DST, and exclude the configured holiday');
+  assert.equal(berlinCalendar.plannedCapacityHours, 48);
+
+  const tehranCalendar = calendarMetricsFor(calendarConfig('Asia/Tehran', [6, 0, 1, 2, 3, 4], ['2026-03-21']), calendarSprint(
+    'tehran-week', '2026-03-20', '2026-03-30', '2026-03-19T20:30:00.000Z', '2026-03-29T20:30:00.000Z',
+  ));
+  assert.equal(tehranCalendar.workingDays, 8, 'Tehran uses its configured Saturday-through-Thursday week and holiday');
+
+  const losAngelesCalendar = calendarMetricsFor(calendarConfig('America/Los_Angeles', [0, 1, 2, 3, 4], ['2026-03-26']), calendarSprint(
+    'los-angeles-partial-week', '2026-03-24', '2026-03-28', '2026-03-24T07:00:00.000Z', '2026-03-28T07:00:00.000Z',
+  ));
+  assert.equal(losAngelesCalendar.workingDays, 2, 'date-only planned bounds remain local dates west of UTC');
+
+  const intervalCalendar = calendarMetricsFor(calendarConfig('Europe/Berlin', [1, 2, 3, 4, 5], [], [
+    { start: '09:00', end: '12:00' }, { start: '13:00', end: '17:00' },
+  ]), calendarSprint('split-shift', '2026-03-30', '2026-03-30', '2026-03-30T00:00:00.000Z', '2026-03-30T23:00:00.000Z'));
+  assert.equal(intervalCalendar.workingDays, 0.875, 'configured split shifts produce a seven-hour working day equivalent');
+  assert.equal(intervalCalendar.plannedCapacityHours, 7);
+
+  const springDstShift = calendarMetricsFor(calendarConfig('Europe/Berlin', [0], [], [{ start: '01:30', end: '03:30' }]), calendarSprint(
+    'spring-dst-shift', '2026-03-29', '2026-03-29', '2026-03-29T00:00:00.000Z', '2026-03-29T21:59:59.000Z',
+  ));
+  assert.equal(springDstShift.plannedCapacityHours, 1, 'spring-forward shift overlap uses elapsed hours across the DST gap');
+  const fallDstShift = calendarMetricsFor(calendarConfig('Europe/Berlin', [0], [], [{ start: '02:30', end: '03:30' }]), calendarSprint(
+    'fall-dst-shift', '2026-10-25', '2026-10-25', '2026-10-25T00:00:00.000Z', '2026-10-25T22:59:59.000Z',
+  ));
+  assert.equal(fallDstShift.plannedCapacityHours, 2, 'fall-back ambiguous start uses the earlier instant and spans both repeated hours');
+  const invalidGapShift = calendarMetricsFor(calendarConfig('Europe/Berlin', [0], [], [{ start: '02:30', end: '03:30' }]), calendarSprint(
+    'spring-dst-gap', '2026-03-29', '2026-03-29', '2026-03-29T00:00:00.000Z', '2026-03-29T21:59:59.000Z',
+  ));
+  assert.equal(invalidGapShift.plannedWorkingDays, null, 'a configured interval inside the spring-forward gap is unavailable');
+  assert.match(invalidGapShift.calendarEstimateReason, /invalid local-time boundary/);
+
+  const timestampInterval = calendarMetricsFor(calendarConfig('Europe/Berlin', [1, 2, 3, 4, 5], [], [{ start: '09:00', end: '12:00' }]), calendarSprint(
+    'offset-aware-window', '2026-03-30T09:00:00+02:00', '2026-03-30T12:00:00+02:00', '2026-03-30T00:00:00.000Z', '2026-03-30T21:59:59.000Z',
+  ));
+  assert.equal(timestampInterval.plannedCapacityHours, 3, 'offset-aware timestamps preserve exact half-open interval overlap');
+
+  const partialNoInterval = calendarMetricsFor(calendarConfig('UTC', [1, 2, 3, 4, 5]), calendarSprint(
+    'partial-no-shifts', '2026-03-30T12:00:00Z', '2026-03-31T12:00:00Z', '2026-03-30T00:00:00.000Z', '2026-03-31T12:00:00.000Z',
+  ));
+  assert.equal(partialNoInterval.plannedWorkingDays, 2, 'without intervals, touched partial working dates keep the documented whole-day estimate');
+  assert.equal(partialNoInterval.calendarEstimateQuality, 'approximate');
+
+  const ambiguousCalendar = calendarMetricsFor(calendarConfig('Europe/Berlin', [1, 2, 3, 4, 5]), calendarSprint(
+    'ambiguous-date', '2026-03-30T09:00:00', '2026-03-31T09:00:00', '2026-03-30T00:00:00.000Z', '2026-03-30T23:00:00.000Z',
+  ));
+  assert.equal(ambiguousCalendar.plannedWorkingDays, null, 'local timestamp strings without an offset do not silently use the host timezone');
+  assert.match(ambiguousCalendar.scope.capacityEstimateReason, /unambiguous instant/);
+  assert.equal(berlinCalendar.scope.capacityHours, null, 'team capacity remains unavailable without assigned people or overrides');
+  assert.match(berlinCalendar.scope.capacityEstimateReason, /No team-member allocation/);
   assert.equal(businessReport.unmapped.count, 0);
   businessDb.close();
 }

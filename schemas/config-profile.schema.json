@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://axiloom.dev/schemas/config-profile.v2.json",
+  "$id": "https://axiloom.dev/schemas/config-profile.v3.json",
   "title": "Axiloom configuration profile",
   "type": "object",
   "additionalProperties": true,
@@ -38,7 +38,7 @@
     "statusNames": { "type": "array", "uniqueItems": true, "items": { "type": "string", "maxLength": 160 } }
   },
   "properties": {
-    "schemaVersion": { "const": 2 },
+    "schemaVersion": { "const": 3 },
     "configurationRevision": { "type": "integer", "minimum": 0 },
     "organization": {
       "type": "object",
@@ -110,7 +110,37 @@
       },
       "additionalProperties": false
     },
-    "calendar": { "type": "object", "required": ["configured", "timeZone", "workingDays", "hoursPerDay", "holidays"], "properties": { "configured": { "type": "boolean" }, "timeZone": { "type": "string" }, "workingDays": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 6 } }, "hoursPerDay": { "type": "number", "exclusiveMinimum": 0, "maximum": 24 }, "holidays": { "type": "array", "items": { "type": "string", "format": "date" } }, "workIntervals": { "type": "array" } }, "additionalProperties": false },
+    "calendar": { "type": "object", "required": ["configured", "timeZone", "workingDays", "hoursPerDay", "holidays"], "properties": { "configured": { "type": "boolean" }, "timeZone": { "type": "string" }, "workingDays": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 6 } }, "hoursPerDay": { "type": "number", "exclusiveMinimum": 0, "maximum": 24 }, "holidays": { "type": "array", "items": { "type": "string", "format": "date" } }, "workIntervals": { "type": "array", "items": { "$ref": "#/$defs/workInterval" } } }, "additionalProperties": false },
+    "capacityOverrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["teamId", "sprintId", "assigneeKey", "assignee", "activeFrom", "activeTo", "overrideWorkingDays", "allocation"],
+        "properties": {
+          "teamId": { "type": "string", "maxLength": 80 },
+          "sprintId": { "type": "string", "maxLength": 80 },
+          "assigneeKey": { "type": "string", "maxLength": 160 },
+          "assignee": { "type": "string", "maxLength": 200 },
+          "activeFrom": { "type": "string", "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}$" },
+          "activeTo": { "type": "string", "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}$" },
+          "overrideWorkingDays": { "type": ["number", "null"], "minimum": 0, "maximum": 366 },
+          "allocation": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
     "modules": { "type": "object", "additionalProperties": { "type": "boolean" } }
+  },
+  "$defs": {
+    "workInterval": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" },
+        "end": { "type": "string", "pattern": "^(?:([01]\\d|2[0-3]):[0-5]\\d|24:00)$" },
+        "weekdays": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 6 } }
+      },
+      "additionalProperties": false
+    }
   }
 }

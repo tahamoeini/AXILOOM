@@ -143,10 +143,12 @@ export interface JiraRoute {
 }
 
 export interface CapacityOverride {
-  team: string;
+  teamId: string;
   sprintId: string;
   assigneeKey: string;
   assignee: string;
+  activeFrom: string;
+  activeTo: string;
   overrideWorkingDays: number | null;
   allocation: number;
 }

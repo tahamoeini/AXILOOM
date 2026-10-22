@@ -6,7 +6,7 @@ Axiloom starts with an unconfigured, organization-neutral workspace. It does not
 
 The current profile shape is documented in [`config-profile.schema.json`](../schemas/config-profile.schema.json). Runtime validation in the Electron main process enforces field and cross-field rules before persistence. The persisted record has a schema version and an incrementing configuration revision. Each semantic change creates an immutable revision and a fingerprint used by report-cache keys.
 
-Runtime validation treats missing versions as legacy input and migrates them to the current schema. Version 1 profiles gain private-network access defaults when normalized to version 2. Malformed, fractional, negative, and newer-than-supported versions are rejected before normalization; a profile import remains a draft until the user reviews it and saves it.
+Runtime validation treats missing versions as legacy input and migrates them to the current schema. Version 1 profiles gain private-network access defaults; version 1 and 2 capacity overrides migrate from team labels to stable team IDs when normalized to version 3. Malformed, fractional, negative, and newer-than-supported versions are rejected before normalization; a profile import remains a draft until the user reviews it and saves it.
 
 The profile contains:
 
@@ -16,7 +16,8 @@ The profile contains:
 - Effective-dated board-to-team routes, project defaults, component assignments, and reviewed issue-specific overrides. A board may move to another team through non-overlapping dated routes.
 - Field bindings scoped by semantic key, project, and issue type. Provider field IDs are data supplied by the connected Jira catalog or the user, validated before persistence, and never interpolated into SQL or URL paths.
 - Separate workflow policies for delivery, intake, and commitments, including completion and optional lifecycle/milestone states.
-- Calendar timezone, weekdays, hours, holidays, and effective work intervals.
+- Calendar timezone, weekdays, holidays, daily work intervals, and nominal working-day hours. Date-only sprint start and end dates include both local dates; offset-aware timestamp bounds preserve their source instants and use half-open overlap. Intervals support partial-day boundaries and DST-aware elapsed hours. Without explicit intervals, a touched partial working date is counted as a full day and marked approximate.
+- Capacity overrides keyed by stable team ID and assignee key, scoped to a sprint or inclusive effective dates. A name-based override from an older profile is migrated to the existing stable team ID. Capacity inferred from issue assignees defaults to 100% and remains labeled as an estimate because the product does not have an authoritative staffing roster.
 - Module switches. A module is enabled only when its declared prerequisites are mapped and valid.
 
 Each workspace has one active source identity. The provider, stable source ID, and canonical endpoint cannot be changed after source evidence or local Jira links are present; connect another Jira instance in a separate workspace. Before ingestion, changing the source identity clears any saved Jira credential and metadata cached for the previous endpoint. Offline JSON imports require a user-confirmed source label that becomes part of that source identity. An older offline workspace with existing evidence but no source ID is bound only after the user confirms which source its existing data belongs to. Configuration profiles cannot move a workspace's existing evidence to a different source.

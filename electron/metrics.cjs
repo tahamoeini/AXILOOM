@@ -192,23 +192,116 @@ function localDateParts(timestamp, timeZone = 'UTC') {
   return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
 }
 
-function workingDays(start, end, calendar) {
-  if (!calendar?.configured) return null;
-  const first = localDateParts(start, calendar.timeZone);
-  const last = localDateParts(end, calendar.timeZone);
-  let cursor = Date.UTC(first.year, first.month - 1, first.day);
-  const endBoundary = Date.UTC(last.year, last.month - 1, last.day);
-  if (endBoundary < cursor) return null;
-  let count = 0;
+function localDateTimeParts(timestamp, timeZone = 'UTC') {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(timestamp));
+  return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
+}
+
+function localWallTimeToInstant(date, minuteOfDay, timeZone, boundary = 'start') {
+  const desired = new Date(Date.UTC(date.year, date.month - 1, date.day, 0, minuteOfDay));
+  const targetMs = desired.getTime();
+  const expected = { year: desired.getUTCFullYear(), month: desired.getUTCMonth() + 1, day: desired.getUTCDate(), hour: desired.getUTCHours(), minute: desired.getUTCMinutes() };
+  const offsets = new Set();
+  for (const hours of [-36, -24, -12, 0, 12, 24, 36]) {
+    const sample = targetMs + hours * 3600000;
+    const local = localDateTimeParts(sample, timeZone);
+    offsets.add(Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute) - Math.floor(sample / 60000) * 60000);
+  }
+  const candidates = Array.from(offsets, (offset) => targetMs - offset).filter((candidate) => {
+    const local = localDateTimeParts(candidate, timeZone);
+    return local.year === expected.year && local.month === expected.month && local.day === expected.day
+      && local.hour === expected.hour && local.minute === expected.minute;
+  }).sort((a, b) => a - b);
+  if (!candidates.length) return null;
+  return boundary === 'end' ? candidates[candidates.length - 1] : candidates[0];
+}
+
+function calendarBoundary(value, timeZone, boundary) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const text = String(value || '').trim();
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    const dateMs = Date.parse(`${text}T00:00:00.000Z`);
+    if (!Number.isFinite(dateMs) || new Date(dateMs).toISOString().slice(0, 10) !== text) return null;
+    const date = { year: Number(dateOnly[1]), month: Number(dateOnly[2]), day: Number(dateOnly[3]) };
+    return localWallTimeToInstant(boundary === 'end' ? nextCalendarDate(date) : date, 0, timeZone, boundary);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)) return null;
+  const dateText = text.slice(0, 10);
+  const dateMs = Date.parse(`${dateText}T00:00:00.000Z`);
+  if (!Number.isFinite(dateMs) || new Date(dateMs).toISOString().slice(0, 10) !== dateText) return null;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function nextCalendarDate(date) {
+  const next = new Date(Date.UTC(date.year, date.month - 1, date.day + 1));
+  return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
+}
+
+function dateKey(date) {
+  return `${String(date.year).padStart(4, '0')}-${String(date.month).padStart(2, '0')}-${String(date.day).padStart(2, '0')}`;
+}
+
+function plannedCalendar(startValue, endValue, calendar) {
+  if (!calendar?.configured) return { workingDays: null, capacityHours: null, quality: 'unavailable', reason: 'Calendar is not configured.' };
+  const startMs = calendarBoundary(startValue, calendar.timeZone, 'start');
+  const endMs = calendarBoundary(endValue, calendar.timeZone, 'end');
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return { workingDays: null, capacityHours: null, quality: 'unavailable', reason: 'Sprint dates are missing or do not identify an unambiguous instant.' };
+  }
+  if (endMs <= startMs) return { workingDays: null, capacityHours: null, quality: 'unavailable', reason: 'Sprint end must be after sprint start.' };
+  const first = localDateParts(startMs, calendar.timeZone);
+  const last = localDateParts(endMs - 1, calendar.timeZone);
+  let cursor = { year: first.year, month: first.month, day: first.day };
   const weekdays = new Set(calendar.workingDays || []);
   const holidays = new Set(calendar.holidays || []);
-  while (cursor < endBoundary) {
-    const weekday = new Date(cursor).getUTCDay();
-    const date = new Date(cursor).toISOString().slice(0, 10);
-    if (weekdays.has(weekday) && !holidays.has(date)) count += 1;
-    cursor += 86400000;
+  const intervals = Array.isArray(calendar.workIntervals) ? calendar.workIntervals : [];
+  const hoursPerDay = Number(calendar.hoursPerDay);
+  let workingDayUnits = 0;
+  let capacityHours = 0;
+  let approximate = false;
+  while (Date.UTC(cursor.year, cursor.month - 1, cursor.day) <= Date.UTC(last.year, last.month - 1, last.day)) {
+    const dateUtc = Date.UTC(cursor.year, cursor.month - 1, cursor.day);
+    const weekday = new Date(dateUtc).getUTCDay();
+    if (weekdays.has(weekday) && !holidays.has(dateKey(cursor))) {
+      if (intervals.length) {
+        let dayHours = 0;
+        for (const interval of intervals.filter((item) => !Array.isArray(item.weekdays) || item.weekdays.includes(weekday))) {
+          const startMinute = Number(interval.start.slice(0, 2)) * 60 + Number(interval.start.slice(3));
+          const endMinute = Number(interval.end.slice(0, 2)) * 60 + Number(interval.end.slice(3));
+          const shiftStart = localWallTimeToInstant(cursor, startMinute, calendar.timeZone, 'start');
+          const shiftEnd = localWallTimeToInstant(cursor, endMinute, calendar.timeZone, 'end');
+          if (!Number.isFinite(shiftStart) || !Number.isFinite(shiftEnd) || shiftEnd <= shiftStart) {
+            return { workingDays: null, capacityHours: null, quality: 'unavailable', reason: `A work interval falls in an invalid local-time boundary on ${dateKey(cursor)}.` };
+          }
+          const overlap = Math.max(0, Math.min(endMs, shiftEnd) - Math.max(startMs, shiftStart));
+          dayHours += overlap / 3600000;
+        }
+        capacityHours += dayHours;
+      } else {
+        const dayStart = localWallTimeToInstant(cursor, 0, calendar.timeZone, 'start');
+        const dayEnd = localWallTimeToInstant(nextCalendarDate(cursor), 0, calendar.timeZone, 'end');
+        if (!Number.isFinite(dayStart) || !Number.isFinite(dayEnd) || dayEnd <= dayStart) {
+          return { workingDays: null, capacityHours: null, quality: 'unavailable', reason: `The local calendar day ${dateKey(cursor)} cannot be resolved in ${calendar.timeZone}.` };
+        }
+        const overlap = Math.max(0, Math.min(endMs, dayEnd) - Math.max(startMs, dayStart));
+        if (overlap > 0) {
+          workingDayUnits += 1;
+          capacityHours += hoursPerDay;
+          if (overlap < dayEnd - dayStart) approximate = true;
+        }
+      }
+    }
+    cursor = nextCalendarDate(cursor);
   }
-  return count;
+  const workingDays = intervals.length ? capacityHours / hoursPerDay : workingDayUnits;
+  return {
+    workingDays, capacityHours, quality: approximate ? 'approximate' : 'exact',
+    reason: approximate ? 'A sprint boundary cuts through a working day; whole-day capacity is approximate.' : '',
+  };
 }
 
 function inclusiveCalendarDays(start, end, timeZone = 'UTC') {
@@ -502,6 +595,9 @@ function scoreBundle(rows, sprint, config = {}) {
   const capacityCritical = Number(config.capacityCritical ?? 1);
   const capacityStatus = capacityHours === null || capacityHours <= 0 ? 'Unavailable'
     : utilization >= capacityCritical ? 'Over Capacity' : utilization >= capacityWarning ? 'Near Capacity' : 'Within Threshold';
+  const capacityEstimateReason = sprint.capacityHoursReason || (capacityHours === 0
+    ? 'No scheduled working time falls within the sprint window.'
+    : capacityHours === null ? 'Capacity inputs are unavailable.' : '');
   const scopeChurnRate = committedSP > 0 ? (addedSP + removedSP) / committedSP : null;
   const estimateBias = pairedEstimate > 0 ? (pairedActual - pairedEstimate) / pairedEstimate : null;
   const plannedEstimateBias = plannedBiasEstimateHours > 0 ? (plannedBiasLoggedHours - plannedBiasEstimateHours) / plannedBiasEstimateHours : null;
@@ -536,7 +632,8 @@ function scoreBundle(rows, sprint, config = {}) {
     oldestOpenCarryoverAgeDays: unfinishedAges.length ? Math.max(...unfinishedAges) : null,
     scopeChurnRate, scopeStability: bounded(scopeStability), loggedHours: allLogged, scopeLoggedHours: allLogged,
     negativeTimeAdjustmentCount: negativeTimeAdjustments, negativeTimeAdjustments, capacityHours, utilization, capacityLoad: utilization,
-    capacityStatus, remainingEstimateHoursAtEnd: sumMeasure(rows, (row) => row.remainingSecondsAtEnd === null ? null : row.remainingSecondsAtEnd / 3600),
+    capacityStatus, capacityEstimateReason,
+    remainingEstimateHoursAtEnd: sumMeasure(rows, (row) => row.remainingSecondsAtEnd === null ? null : row.remainingSecondsAtEnd / 3600),
     timeSpentHoursAtEnd: sumMeasure(rows, (row) => row.timeSpentSecondsAtEnd === null ? null : row.timeSpentSecondsAtEnd / 3600),
     originalEstimateHours: estimateHours(rows), estimateConsumed: safeDiv(completedLogged, completedEstimates), storyPointCoverage: safeDiv(spCoverage, rows.length),
     completedStoryPointCoverage, spEstimatedIssues: spCoverage,
@@ -785,6 +882,7 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const window = extractActualSprint(raw, nowMs);
     const plannedStart = Date.parse(raw.startDate || '');
     const plannedEnd = Date.parse(raw.endDate || '');
+    const calendarEstimate = plannedCalendar(raw.startDate, raw.endDate, config.calendar);
     const route = resolveBoardTeam(config, boardId, window?.endMs ?? plannedEnd, raw.teamRoute || '');
     return {
       ...raw,
@@ -795,7 +893,10 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
       teamRoutePath: route.teamPath,
       teamRouteStatus: route.status,
       window,
-      plannedWorkingDays: config.calendar?.configured && Number.isFinite(plannedStart) && Number.isFinite(plannedEnd) ? workingDays(plannedStart, plannedEnd, config.calendar) : null,
+      plannedWorkingDays: calendarEstimate.workingDays,
+      plannedCapacityHours: calendarEstimate.capacityHours,
+      calendarEstimateQuality: calendarEstimate.quality,
+      calendarEstimateReason: calendarEstimate.reason,
       reportEligible: Boolean(window),
       name: raw.name || `Sprint ${raw.id}`,
     };
@@ -953,7 +1054,7 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
   const configuredCapacityOverrides = Array.isArray(config.capacityOverrides) ? config.capacityOverrides : [];
   relations.forEach((relation) => {
     const personKey = getAssigneeKey(relation.assignee);
-    if (!personKey || !config.calendar?.configured || !relation.sprint.plannedWorkingDays) return;
+    if (!personKey || !config.calendar?.configured || !Number.isFinite(relation.sprint.plannedCapacityHours)) return;
     const allocation = 1;
     const key = `${relation.team}|${relation.sprint.id}|${personKey}`;
     if (!personCapacity.has(key)) personCapacity.set(key, {
@@ -962,28 +1063,34 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
       teamPath: relation.teamPath,
       sprint: relation.sprint,
       assignee: relation.assignee,
-      capacityHours: relation.sprint.plannedWorkingDays * Number(config.calendar.hoursPerDay) * allocation,
+      capacityHours: relation.sprint.plannedCapacityHours * allocation,
     });
   });
   configuredCapacityOverrides.forEach((item) => {
-    const team = String(item.team || '');
+    const teamId = String(item.teamId || '');
+    const team = config.teams.find((candidate) => candidate.id === teamId)?.name || '';
     const sprintId = String(item.sprintId || '');
     const assigneeKey = String(item.assigneeKey || '');
-    if (!team || !sprintId || !assigneeKey) return;
-    const sprint = normalizedSprints.find((candidate) => candidate.id === sprintId && candidate.window
-      && (candidate.teamRoute === team || relations.some((relation) => relation.sprint.id === sprintId && relation.team === team)));
+    if (!teamId || !team || !assigneeKey) return;
+    const sprint = normalizedSprints.find((candidate) => (!sprintId || candidate.id === sprintId) && candidate.window
+      && (candidate.teamRouteId === teamId || relations.some((relation) => relation.sprint.id === candidate.id && relation.teamId === teamId))
+      && isActiveAt(item, candidate.window.endMs));
     if (!sprint) return;
-    const key = `${team}|${sprintId}|${assigneeKey}`;
+    const key = `${team}|${sprint.id}|${assigneeKey}`;
     const current = personCapacity.get(key);
     const assignee = current?.assignee || { key: assigneeKey, name: String(item.assignee || assigneeKey), displayName: String(item.assignee || assigneeKey) };
     if (!config.calendar?.configured) return;
-    const days = item.overrideWorkingDays === null || item.overrideWorkingDays === undefined || item.overrideWorkingDays === ''
-      ? Number(sprint.plannedWorkingDays || 0) : Number(item.overrideWorkingDays);
+    const hasWorkingDayOverride = item.overrideWorkingDays !== null && item.overrideWorkingDays !== undefined && item.overrideWorkingDays !== '';
+    const days = hasWorkingDayOverride ? Number(item.overrideWorkingDays) : Number(sprint.plannedWorkingDays || 0);
     const allocation = Number.isFinite(Number(item.allocation)) ? Math.max(0, Math.min(1, Number(item.allocation))) : 1;
+    const baseCapacityHours = hasWorkingDayOverride
+      ? Math.max(0, days) * Number(config.calendar.hoursPerDay)
+      : Number(sprint.plannedCapacityHours);
+    if (!Number.isFinite(baseCapacityHours)) return;
     personCapacity.set(key, {
-      team, sprint, assignee, capacityHours: Math.max(0, days) * Number(config.calendar.hoursPerDay) * allocation,
-      teamId: current?.teamId || config.teams.find((candidate) => candidate.name === team)?.id || '',
-      teamPath: current?.teamPath || configuredTeamPath(config, config.teams.find((candidate) => candidate.name === team)?.id || ''),
+      team, sprint, assignee, capacityHours: baseCapacityHours * allocation,
+      teamId: current?.teamId || teamId,
+      teamPath: current?.teamPath || configuredTeamPath(config, teamId),
       manualOverride: true,
     });
   });
@@ -1011,7 +1118,15 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const [team] = key.split('|');
     const sprint = rows[0]?.sprint || sprintByGroup.get(key);
     if (!sprint) return;
-    const capacityHours = config.calendar?.configured ? capacityBySprint.get(`${team}|${sprint.id}`) ?? 0 : null;
+    const capacityHours = config.calendar?.configured ? capacityBySprint.get(`${team}|${sprint.id}`) ?? null : null;
+    const allocatedPeople = Array.from(personCapacity.values()).filter((person) => person.team === team && person.sprint.id === sprint.id);
+    const allocationReason = capacityHours === null ? 'No team-member allocation is available for this sprint.'
+      : allocatedPeople.some((person) => !person.manualOverride)
+        ? 'Some assignee allocations default to 100%; the roster is not verified.'
+          : 'The capacity set is based on configured people; roster completeness is not verified.';
+    const capacityHoursReason = !config.calendar?.configured ? 'Calendar is not configured.'
+      : !Number.isFinite(sprint.plannedCapacityHours) ? sprint.calendarEstimateReason
+        : [sprint.calendarEstimateReason, allocationReason].filter(Boolean).join(' ');
     const metric = {
       team,
       teamId: rows[0]?.teamId || sprint.teamRouteId || '',
@@ -1023,7 +1138,10 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
       startDate: sprint.activatedDate || sprint.startDate || '',
       endDate: sprint.completeDate || sprint.endDate || '',
       plannedWorkingDays: sprint.plannedWorkingDays,
-      scope: scoreBundle(rows, { capacityHours }, config),
+      plannedCapacityHours: sprint.plannedCapacityHours,
+      calendarEstimateQuality: sprint.calendarEstimateQuality,
+      calendarEstimateReason: sprint.calendarEstimateReason,
+      scope: scoreBundle(rows, { capacityHours, capacityHoursReason }, config),
       rows,
       sprint,
     };
@@ -1059,8 +1177,14 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const first = rows[0];
     if (!first) return;
     const sprintMetadata = sprintMetadataByKey.get(`${first.team}|${first.sprint.id}`);
-    const capacity = personCapacity.get(`${first.team}|${first.sprint.id}|${getAssigneeKey(first.assignee)}`)?.capacityHours ?? null;
-    const scope = scoreBundle(rows, { capacityHours: capacity }, config);
+    const person = personCapacity.get(`${first.team}|${first.sprint.id}|${getAssigneeKey(first.assignee)}`);
+    const capacity = person?.capacityHours ?? null;
+    const capacityHoursReason = !config.calendar?.configured ? 'Calendar is not configured.'
+      : !Number.isFinite(first.sprint.plannedCapacityHours) && !person?.manualOverride ? first.sprint.calendarEstimateReason
+        : capacity === null ? 'No person allocation is available for this sprint.'
+          : !person?.manualOverride ? 'Person allocation defaults to 100%; no explicit override is configured.'
+            : first.sprint.calendarEstimateReason;
+    const scope = scoreBundle(rows, { capacityHours: capacity, capacityHoursReason }, config);
     ['allocationStatus', 'capacityTargets'].forEach((key) => { delete scope[key]; });
     personMetrics.push({
       team: first.team,
@@ -1275,11 +1399,15 @@ function publicSnapshot(metrics, productRecords, importRuns, conflicts, filters 
     team: metric.team, teamId: metric.teamId, teamPath: metric.teamPath, sprintId: metric.sprintId, sprintName: metric.sprintName, state: metric.state,
     sprintOrder: metric.sprintOrder, calendarDays: metric.calendarDays, workingDays: metric.workingDays,
     startDate: metric.startDate, endDate: metric.endDate, plannedWorkingDays: metric.plannedWorkingDays,
+    plannedCapacityHours: metric.plannedCapacityHours, calendarEstimateQuality: metric.calendarEstimateQuality,
+    calendarEstimateReason: metric.calendarEstimateReason,
     ...metric.scope,
   }));
   const people = metrics.personMetrics.filter((metric) => !selectedTeam || metric.team === selectedTeam).map((metric) => ({
     team: metric.team, teamId: metric.teamId, teamPath: metric.teamPath, sprintId: metric.sprintId, sprintName: metric.sprintName, sprintOrder: metric.sprintOrder,
     calendarDays: metric.calendarDays, workingDays: metric.workingDays, startDate: metric.startDate, endDate: metric.endDate,
+    plannedCapacityHours: metric.plannedCapacityHours, calendarEstimateQuality: metric.calendarEstimateQuality,
+    calendarEstimateReason: metric.calendarEstimateReason,
     assigneeKey: metric.assigneeKey, assignee: metric.assignee,
     ...metric.scope,
     assignedIssues: metric.scope.scopeIssues, assignedSP: metric.scope.scopeSP,
