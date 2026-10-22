@@ -78,6 +78,18 @@
           created: '2026-02-01T00:00:00.000Z', updated: '2026-02-02T00:00:00.000Z', issueLinks: [],
           points: 5, epicLink: '', currentSprintIds: [], isDone: false,
         };
+        const syntheticObjective = {
+          id: 'synthetic-objective', kind: 'objective', title: 'Synthetic market objective',
+          payload: { ownerName: 'Synthetic Owner', status: 'Active', primaryIssueKey: 'ALPHA-101', strategicTheme: 'Research' },
+          createdAt: '2026-02-01T00:00:00.000Z', updatedAt: '2026-02-01T00:00:00.000Z',
+          history: [{ eventType: 'created', occurredAt: '2026-02-01T00:00:00.000Z', payload: { status: 'Active' } }],
+        };
+        const syntheticOutcome = {
+          id: 'synthetic-outcome', kind: 'outcome', title: 'Synthetic outcome review',
+          payload: { hypothesis: 'Research reduces handoff delays', status: 'In Progress', metric: 'handoff time' },
+          createdAt: '2026-02-02T00:00:00.000Z', updatedAt: '2026-02-02T00:00:00.000Z', history: [],
+        };
+        snapshot.records = [syntheticObjective, syntheticOutcome];
         snapshot.summary.issueCount = 1;
         snapshot.summary.projectCounts = [{ project: 'ALPHA', count: 1 }];
         snapshot.summary.lastIssueUpdate = syntheticIssue.updated;
@@ -105,7 +117,7 @@
           capacityHours: 20, utilization: 0.2, capacityEstimateReason: 'Person allocation defaults to 100%; no explicit override is configured.', medianCycleTimeDays: 4, estimateAccuracy: 0.75,
           storyPointCoverage: 1, timeDataCoverage: 1, estimateAccuracyCoverage: 1,
         }];
-        const smoke = { config, snapshot, syntheticIssue, issueExports: [], issueListRequests: [], importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };
+        const smoke = { config, snapshot, syntheticIssue, issueExports: [], relationshipInputs: [], relationshipExports: 0, issueListRequests: [], importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };
         const rememberIssueExport = (format, report) => {
           const rows = report?.sheets?.[0]?.rows || [];
           const workflowScope = smoke.issueListRequests.at(-1)?.workflowScope || '';
@@ -220,11 +232,22 @@
           onJiraProgress: (callback) => { smoke.jiraProgressHandler = callback; return () => { smoke.jiraProgressHandler = null; }; },
           saveRecord: async ({ id, kind, title, payload }) => {
             const timestamp = new Date().toISOString();
-            const record = { id: id || `smoke-${snapshot.records.length + 1}`, kind, title, payload, createdAt: timestamp, updatedAt: timestamp, history: [{ eventType: 'created', occurredAt: timestamp, payload }] };
+            const previous = snapshot.records.find((current) => current.id === id);
+            const record = { id: id || `smoke-${snapshot.records.length + 1}`, kind, title, payload, createdAt: previous?.createdAt || timestamp, updatedAt: timestamp, history: [...(previous?.history || []), { eventType: previous ? 'updated' : 'created', occurredAt: timestamp, payload }] };
             snapshot.records = snapshot.records.filter((current) => current.id !== record.id).concat(record);
             return record;
           },
           archiveRecord: async (id) => { snapshot.records = snapshot.records.filter((record) => record.id !== id); },
+          saveRecordRelationship: async (input) => {
+            smoke.relationshipInputs.push(input);
+            const timestamp = new Date().toISOString();
+            const existing = input.id ? snapshot.relationships.find((item) => item.id === input.id) : undefined;
+            const relationship = { ...input, id: existing?.id || `smoke-relationship-${snapshot.relationships.length + 1}`, sourceLabel: input.sourceType === 'record' ? snapshot.records.find((item) => item.id === input.sourceId)?.title || input.sourceId : input.sourceId, targetLabel: input.targetType === 'record' ? snapshot.records.find((item) => item.id === input.targetId)?.title || input.targetId : `${input.targetId} · ${syntheticIssue.summary}`, createdAt: existing?.createdAt || timestamp, updatedAt: timestamp, history: [...(existing?.history || []), { eventType: existing ? 'updated' : 'created', occurredAt: timestamp, payload: input }] };
+            snapshot.relationships = snapshot.relationships.filter((item) => item.id !== relationship.id).concat(relationship);
+            return relationship;
+          },
+          archiveRecordRelationship: async (id) => { snapshot.relationships = snapshot.relationships.filter((item) => item.id !== id); return { ok: true }; },
+          exportRecordRelationships: async () => { smoke.relationshipExports += 1; return { filePath: 'synthetic-relationships.csv' }; },
           exportXlsx: async (report) => rememberIssueExport('xlsx', report),
           exportPdf: async (report) => rememberIssueExport('pdf', report),
         };

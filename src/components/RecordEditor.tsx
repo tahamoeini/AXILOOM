@@ -134,7 +134,7 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
         payload[field.key] = Array.from(new Set(tokens));
       } else if (field.type === 'enum' && value && !field.options.includes(value)) {
         setError(`Choose a configured value for «${field.label}».`); return;
-      } else if (field.type === 'recordRef' && value && !recordOptions.some((item) => item.id === value && field.referenceKinds.includes(item.kind))) {
+      } else if (field.type === 'recordRef' && value && !recordOptions.some((item) => item.id === value && (field.referenceKinds || []).includes(item.kind))) {
         setError(`Choose an active record of the configured type for «${field.label}».`); return;
       } else payload[field.key] = storedValue(field, value);
     }
@@ -202,7 +202,7 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
       <form onSubmit={submit}>
         <label className="form-field full"><span>Title <i>Required</i></span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Write a short, traceable title" /></label>
         <div className="form-grid">{fields.map((field) => {
-          const referenceOptions = recordOptions.filter((item) => item.id !== record?.id && field.referenceKinds.includes(item.kind));
+          const referenceOptions = recordOptions.filter((item) => item.id !== record?.id && (field.referenceKinds || []).includes(item.kind));
           return <label className={`form-field ${field.type === 'textarea' || field.type === 'issueRefList' ? 'full' : ''}`} key={field.key}><span>{field.label}{field.required && <i>Required</i>}</span>
             {field.type === 'recordRef' ? <select value={values[field.key] || ''} onChange={(event) => update(field.key, event.target.value)}><option value="">No record selected</option>{values[field.key] && !referenceOptions.some((option) => option.id === values[field.key]) && <option value={values[field.key]}>Stored legacy reference · {values[field.key]}</option>}{referenceOptions.map((option) => <option key={option.id} value={option.id}>{option.title}</option>)}</select>
               : field.type === 'enum' ? <select value={values[field.key] || ''} onChange={(event) => update(field.key, event.target.value)}><option value="">Choose a configured value</option>{values[field.key] && !field.options.includes(values[field.key]) && <option value={values[field.key]}>Stored legacy value · {values[field.key]}</option>}{field.options.map((option) => <option key={option}>{option}</option>)}</select>
