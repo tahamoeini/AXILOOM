@@ -1,8 +1,9 @@
 const { createHash } = require('node:crypto');
 
 const { validateNetworkAccess } = require('./jira-providers.cjs');
+const DEFAULT_RECORD_TEMPLATES = require('../shared/record-templates.json');
 
-const CONFIG_SCHEMA_VERSION = 3;
+const CONFIG_SCHEMA_VERSION = 4;
 const SEMANTIC_KEYS = new Set([
   'storyPoints', 'sprint', 'epicLink', 'epicName', 'team', 'workClassification',
   'issueTags', 'requester', 'department', 'productOwner', 'loggedTime',
@@ -64,6 +65,7 @@ const DEFAULT_CONFIG = Object.freeze({
   adhocHoursWarning: 0.3,
   capacityOverrides: [],
   stakeholderContactPoints: [],
+  recordTemplates: DEFAULT_RECORD_TEMPLATES,
 });
 
 function isRecord(value) {
@@ -77,6 +79,66 @@ function asString(value, limit = 200) {
 function stringList(value, limit = 500) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((entry) => asString(entry, limit)).filter(Boolean))];
+}
+
+function normalizeRecordTemplates(input, defaults) {
+  if (input !== undefined) assert(Array.isArray(input), 'Record templates must be an array.');
+  (Array.isArray(input) ? input : []).forEach((template) => {
+    assert(isRecord(template), 'Record templates must be objects.');
+    if (template.enabled !== undefined) assert(typeof template.enabled === 'boolean', `Record template ${template.kind || ''} enabled must be boolean.`);
+    if (template.fields !== undefined) {
+      assert(Array.isArray(template.fields), `Fields for record template ${template.kind || ''} must be an array.`);
+      template.fields.forEach((field) => {
+        assert(isRecord(field), `Fields for record template ${template.kind || ''} must be objects.`);
+        if (field.required !== undefined) assert(typeof field.required === 'boolean', `Required state for field ${field.key || ''} must be boolean.`);
+        if (field.options !== undefined) assert(Array.isArray(field.options), `Options for field ${field.key || ''} must be an array.`);
+        if (field.referenceKinds !== undefined) assert(Array.isArray(field.referenceKinds), `Reference kinds for field ${field.key || ''} must be an array.`);
+      });
+    }
+  });
+  const supplied = Array.isArray(input) ? input.filter(isRecord) : [];
+  const suppliedByKind = new Map(supplied.map((template) => [asString(template.kind, 40).toLowerCase(), template]));
+  const normalized = defaults.map((base) => {
+    const override = suppliedByKind.get(base.kind) || {};
+    const overrideFields = Array.isArray(override.fields) ? override.fields.filter(isRecord) : [];
+    const overrideFieldsByKey = new Map(overrideFields.map((field) => [asString(field.key, 80), field]));
+    const fields = base.fields.map((baseField) => ({ ...baseField, ...(overrideFieldsByKey.get(baseField.key) || {}) }));
+    const knownKeys = new Set(base.fields.map((field) => field.key));
+    overrideFields.forEach((field) => { if (!knownKeys.has(asString(field.key, 80))) fields.push(field); });
+    return {
+      ...base,
+      ...override,
+      kind: base.kind,
+      label: asString(override.label ?? base.label, 160),
+      group: asString(override.group ?? base.group, 40),
+      enabled: override.enabled === undefined ? base.enabled !== false : override.enabled,
+      fields: fields.filter(isRecord).map((field) => ({
+        key: asString(field.key, 80),
+        label: asString(field.label, 160),
+        type: asString(field.type || 'text', 32),
+        required: Boolean(field.required),
+        options: stringList(field.options, 160),
+        referenceKinds: stringList(field.referenceKinds, 40).map((kind) => kind.toLowerCase()),
+      })),
+    };
+  });
+  const defaultKinds = new Set(defaults.map((template) => template.kind));
+  supplied.forEach((template) => {
+    const kind = asString(template.kind, 40).toLowerCase();
+    if (!kind || defaultKinds.has(kind)) return;
+    normalized.push({
+      kind,
+      label: asString(template.label, 160),
+      group: asString(template.group || 'custom', 40),
+      enabled: template.enabled === undefined ? true : template.enabled,
+      fields: (Array.isArray(template.fields) ? template.fields : []).filter(isRecord).map((field) => ({
+        key: asString(field.key, 80), label: asString(field.label, 160), type: asString(field.type || 'text', 32),
+        required: Boolean(field.required), options: stringList(field.options, 160),
+        referenceKinds: stringList(field.referenceKinds, 40).map((referenceKind) => referenceKind.toLowerCase()),
+      })),
+    });
+  });
+  return normalized;
 }
 
 function stableLegacyTeamId(name) {
@@ -254,6 +316,7 @@ function normalizeConfig(input = {}) {
     fieldMappings,
     workClassifications,
     issueTypeClassifications,
+    recordTemplates: normalizeRecordTemplates(input.recordTemplates, defaults.recordTemplates),
     capacityOverrides,
     workflows,
     calendar: {
@@ -362,6 +425,35 @@ function validateConfig(input) {
   }
   assert(config.projects.length <= 500, 'At most 500 projects may be configured.');
   config.projects.forEach((key) => assert(/^[A-Z][A-Z0-9_]*$/.test(key), `Invalid project key: ${key}`));
+
+  const templateKinds = new Set();
+  const fieldTypes = new Set(['text', 'textarea', 'date', 'enum', 'recordRef', 'issueRef', 'issueRefList', 'number', 'boolean']);
+  assert(config.recordTemplates.length <= 100, 'At most 100 product record templates may be configured.');
+  config.recordTemplates.forEach((template) => {
+    assert(/^[a-z][a-z0-9_-]{0,39}$/.test(template.kind), `Invalid record template key: ${template.kind}`);
+    assert(!templateKinds.has(template.kind), `Duplicate record template key: ${template.kind}`);
+    templateKinds.add(template.kind);
+    assert(template.label.length > 0, `Record template ${template.kind} needs a label.`);
+    assert(/^[a-z][a-z0-9_-]{0,39}$/.test(template.group), `Invalid register group for ${template.kind}.`);
+    assert(typeof template.enabled === 'boolean', `Record template ${template.kind} enabled must be boolean.`);
+    assert(template.fields.length <= 200, `Record template ${template.kind} has too many fields.`);
+    const fieldKeys = new Set();
+    template.fields.forEach((field) => {
+      assert(/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(field.key), `Invalid field key in record template ${template.kind}.`);
+      assert(!fieldKeys.has(field.key), `Duplicate field ${field.key} in record template ${template.kind}.`);
+      fieldKeys.add(field.key);
+      assert(field.label.length > 0, `Field ${field.key} in ${template.kind} needs a label.`);
+      assert(fieldTypes.has(field.type), `Unsupported field type ${field.type} in ${template.kind}.${field.key}.`);
+      assert(typeof field.required === 'boolean', `Required state for ${template.kind}.${field.key} must be boolean.`);
+      assert(field.options.length <= 100 && new Set(field.options).size === field.options.length, `Options for ${template.kind}.${field.key} must be unique and limited to 100.`);
+      if (field.type === 'enum') assert(field.options.length > 0, `Enum field ${template.kind}.${field.key} needs at least one option.`);
+      else assert(field.options.length === 0, `Only enum fields can define options (${template.kind}.${field.key}).`);
+      if (field.type === 'recordRef') {
+        assert(field.referenceKinds.length > 0, `Record reference ${template.kind}.${field.key} needs at least one target kind.`);
+        field.referenceKinds.forEach((referenceKind) => assert(templateKinds.has(referenceKind) || config.recordTemplates.some((candidate) => candidate.kind === referenceKind), `Record reference ${template.kind}.${field.key} targets unknown kind ${referenceKind}.`));
+      } else assert(field.referenceKinds.length === 0, `Only record references can define target kinds (${template.kind}.${field.key}).`);
+    });
+  });
 
   const teamIds = new Set();
   config.teams.forEach((team) => {

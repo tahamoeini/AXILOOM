@@ -13,7 +13,8 @@ assert.deepEqual(DEFAULT_CONFIG.teams, []);
 assert.deepEqual(DEFAULT_CONFIG.fieldMappings, []);
 assert.equal(DEFAULT_CONFIG.calendar.configured, false);
 assert.equal(DEFAULT_CONFIG.modules.businessSprint, false);
-assert.throws(() => validateConfig({ schemaVersion: 4 }), /newer than the supported version 3/,
+assert.ok(DEFAULT_CONFIG.recordTemplates.some((template) => template.kind === 'product'));
+assert.throws(() => validateConfig({ schemaVersion: 5 }), /newer than the supported version 4/,
   'profiles from a newer schema must fail instead of being downgraded');
 assert.throws(() => validateConfig({ schemaVersion: 1.5 }), /non-negative integer/,
   'fractional schema versions must fail validation');
@@ -42,13 +43,25 @@ const profile = validateConfig({
   modules: { delivery: true, portfolio: true },
 });
 
-assert.equal(profile.schemaVersion, 3, 'version 1 profiles migrate with private network access and current calendar rules');
+assert.equal(profile.schemaVersion, 4, 'version 1 profiles migrate with private network access, current calendar rules, and typed record templates');
 assert.deepEqual(profile.sourceInstance.networkAccess, { mode: 'private', approvedAddresses: [] });
 assert.equal(profile.boardRoutes[0].team, 'Platform');
 assert.equal(profile.boardRoutes[0].activeFrom, '', 'legacy board routes remain open-ended after normalization');
 assert.equal(profile.fieldMappings[0].providerFieldId, 'customfield_12345');
 assert.deepEqual(profile.projectRoles.productIntake, ['IDEAS']);
 assert.equal(profile.calendar.timeZone, 'Europe/Berlin');
+const customRecordProfile = validateConfig({
+  recordTemplates: [
+    { kind: 'initiative', label: 'Program', fields: [{ key: 'status', label: 'Stage', type: 'enum', options: ['Idea', 'Complete'] }] },
+    { kind: 'portfolio_item', label: 'Portfolio item', group: 'strategy', fields: [{ key: 'owner', label: 'Owner', type: 'text', required: true }] },
+  ],
+});
+assert.equal(customRecordProfile.recordTemplates.find((template) => template.kind === 'initiative').label, 'Program');
+assert.deepEqual(customRecordProfile.recordTemplates.find((template) => template.kind === 'initiative').fields.find((field) => field.key === 'status').options, ['Idea', 'Complete']);
+assert.ok(customRecordProfile.recordTemplates.find((template) => template.kind === 'portfolio_item')?.enabled);
+assert.throws(() => validateConfig({ recordTemplates: [{ kind: 'scripted', label: 'Unsafe', fields: [{ key: 'value', label: 'Value', type: 'javascript', required: false }] }] }), /Unsupported field type/);
+assert.throws(() => validateConfig({ recordTemplates: [{ kind: 'broken', label: 'Broken', fields: [{ key: 'stage', label: 'Stage', type: 'enum', options: [] }] }] }), /needs at least one option/);
+assert.throws(() => validateConfig({ recordTemplates: [{ kind: 'broken', label: 'Broken', fields: [{ key: 'parent', label: 'Parent', type: 'recordRef', referenceKinds: ['missing'] }] }] }), /targets unknown kind/);
 const migratedCapacityProfile = validateConfig({
   schemaVersion: 2,
   teams: [{ id: 'team-legacy', name: 'Legacy Team', aliases: [] }],

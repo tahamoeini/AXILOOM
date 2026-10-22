@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
-const { getConfig, readRows, getDataGeneration, getMetricsGeneration, getCachedReport, saveCachedReport, saveBusinessIssueCache, getCachedMetrics, saveCachedMetrics } = require('./database.cjs');
+const { getConfig, readRows, getDataGeneration, getMetricsGeneration, getCachedReport, saveCachedReport, saveBusinessIssueCache, getCachedMetrics, saveCachedMetrics, listRecordRelationships } = require('./database.cjs');
 const { calculateMetrics, compactMetricsForCache, publicSnapshot } = require('./metrics.cjs');
 
 function safeJson(value, fallback) {
@@ -44,6 +44,7 @@ function buildSnapshot(db, filters = {}, options = {}) {
     db.prepare('SELECT * FROM local_issue_links ORDER BY updated_at DESC').all(),
     config,
   );
+  snapshot.relationships = listRecordRelationships(db);
   // Issue tables are requested through indexed, server-paginated projections. Keep
   // historical calculations on the trusted metrics engine, while avoiding shipping
   // every normalized issue row to the renderer on each page load.
@@ -78,6 +79,7 @@ function buildSnapshot(db, filters = {}, options = {}) {
     issueHistoryEvents: Number(db.prepare('SELECT COUNT(*) AS count FROM jira_issue_history').get().count),
     sprintRevisions: Number(db.prepare('SELECT COUNT(*) AS count FROM jira_sprint_revisions').get().count),
     localLinkEvents: Number(db.prepare('SELECT COUNT(*) AS count FROM local_issue_link_events').get().count),
+    recordRelationshipEvents: Number(db.prepare('SELECT COUNT(*) AS count FROM record_relationship_events').get().count),
   };
   if (options.cacheMetadata) options.cacheMetadata.value = {
     cacheKey, dataGeneration, engineHash, configHash,

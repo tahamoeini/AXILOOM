@@ -80,8 +80,8 @@ try {
 
   const result = await migrateWorkspace({ sourcePath, destinationPath });
   assert.equal(result.sourceSchemaVersion, 1);
-  assert.equal(result.destinationSchemaVersion, 8);
-  assert.equal(result.destinationConfigSchemaVersion, 3);
+  assert.equal(result.destinationSchemaVersion, 9);
+  assert.equal(result.destinationConfigSchemaVersion, 4);
   assert.equal(result.preservedEvidenceRowsVerified.product_records, 1);
   assert.equal(result.preservedEvidenceRowsVerified.record_events, 1);
   assert.equal(result.preservedEvidenceRowsVerified.jira_issue_tombstones, 1);
@@ -92,7 +92,8 @@ try {
   const migrated = new DatabaseSync(destinationPath, { readOnly: true });
   try {
     assert.equal(migrated.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
-    assert.equal(migrated.prepare('PRAGMA user_version').get().user_version, 8);
+    assert.equal(migrated.prepare('PRAGMA user_version').get().user_version, 9);
+    assert.equal(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='record_relationships'").get()?.name, 'record_relationships');
     assert.equal(migrated.prepare('SELECT raw_json FROM jira_issue_revisions WHERE jira_id=?').get('1001').raw_json, rawIssue);
     assert.equal(migrated.prepare('SELECT raw_json FROM jira_sprint_revisions WHERE sprint_id=?').get('12').raw_json, rawSprint);
     assert.equal(migrated.prepare('SELECT raw_json FROM jira_issue_tombstones WHERE issue_key=?').get('ALT-2').raw_json, '{"id":"1002","key":"ALT-2"}');

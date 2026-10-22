@@ -4,7 +4,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { openDatabase, getConfig, saveConfig, saveIssue, saveSprint, saveLocalIssueLink, removeLocalIssueLink, getIssueDetails, getIssueActivity, getSprintDetails, listIssues, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport, getBusinessBoardReport } = require('./database.cjs');
+const { openDatabase, getConfig, saveConfig, saveIssue, saveSprint, saveLocalIssueLink, removeLocalIssueLink, saveRecordRelationship, listRecordRelationships, archiveRecordRelationship, getIssueDetails, getIssueActivity, getSprintDetails, listIssues, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport, getBusinessBoardReport } = require('./database.cjs');
 const { sourceIdentityKey } = require('./configuration.cjs');
 const { createOfflineAdapter, createProviderAdapter, describeProvider, parseJiraBaseUrl } = require('./jira-providers.cjs');
 const { writeWorkbook } = require('./xlsx.cjs');
@@ -243,12 +243,20 @@ function readSnapshotInWorker(filters = {}) {
   return result;
 }
 
-function safeRecord(input) {
-  const allowedKinds = new Set(['objective', 'action', 'request', 'decision', 'meeting', 'outcome', 'stakeholder']);
-  if (!allowedKinds.has(input?.kind)) throw new Error('نوع ثبت معتبر نیست.');
+function safeRecord(input, config) {
+  const template = (config.recordTemplates || []).find((item) => item.kind === input?.kind && item.enabled);
+  if (!template) throw new Error('نوع ثبت در قالب‌های فعال این فضای کاری تعریف نشده است.');
   const payload = input.payload && typeof input.payload === 'object' ? input.payload : {};
   const title = String(input.title || payload.title || payload.action || payload.summary || payload.decision || payload.hypothesis || payload.name || '').trim();
   if (!title) throw new Error('عنوان را وارد کنید.');
+  for (const field of template.fields) {
+    const value = payload[field.key];
+    const present = Array.isArray(value) ? value.length > 0 : typeof value === 'boolean' ? true : String(value ?? '').trim() !== '';
+    if (field.required && !present) throw new Error(`فیلد «${field.label}» ضروری است.`);
+    if (field.type === 'enum' && present && !field.options.includes(String(value))) throw new Error(`مقدار «${field.label}» در قالب فعال تعریف نشده است.`);
+    if (field.type === 'number' && present && !Number.isFinite(Number(value))) throw new Error(`فیلد «${field.label}» باید عدد معتبر باشد.`);
+    if (field.type === 'boolean' && present && typeof value !== 'boolean') throw new Error(`فیلد «${field.label}» باید بله یا خیر باشد.`);
+  }
   return { kind: input.kind, title: title.slice(0, 500), payload };
 }
 
@@ -485,7 +493,7 @@ function registerHandlers() {
   });
 
   ipcMain.handle('records:save', (_event, input) => {
-    const record = safeRecord(input);
+    const record = safeRecord(input, getConfig(db));
     if (['request', 'action'].includes(record.kind)) throw new Error('درخواست و تعهد جدید باید به‌صورت تسک واقعی در Jira ایجاد شوند.');
     const id = input.id || randomUUID();
     const now = new Date().toISOString();
@@ -513,6 +521,40 @@ function registerHandlers() {
       invalidateSnapshot();
       return { ok: true };
     } catch (error) { db.exec('ROLLBACK'); throw error; }
+  });
+  ipcMain.handle('records:relationship:save', (_event, input) => {
+    const relationship = saveRecordRelationship(db, input);
+    invalidateSnapshot();
+    return relationship;
+  });
+  ipcMain.handle('records:relationship:archive', (_event, id) => {
+    const result = archiveRecordRelationship(db, id);
+    if (result.ok) invalidateSnapshot();
+    return result;
+  });
+  ipcMain.handle('records:relationships:export', async () => {
+    const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export product relationships',
+      defaultPath: `Axiloom-relationships-${new Date().toISOString().slice(0, 10)}.csv`,
+      filters: [{ name: 'CSV relationship export', extensions: ['csv'] }],
+    });
+    if (canceled || !filePath) return { canceled: true };
+    const columns = ['source_type','source_id','source_label','relationship','target_type','target_id','target_label','evidence','source_origin','source_reference','attributed_to','created_at','updated_at'];
+    const csvCell = (value) => {
+      let text = String(value ?? '');
+      if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const rows = listRecordRelationships(db).map((relationship) => ({
+      source_type: relationship.sourceType, source_id: relationship.sourceId, source_label: relationship.sourceLabel,
+      relationship: relationship.relationship, target_type: relationship.targetType, target_id: relationship.targetId,
+      target_label: relationship.targetLabel, evidence: relationship.evidence, source_origin: relationship.sourceOrigin,
+      source_reference: relationship.sourceReference, attributed_to: relationship.attributedTo,
+      created_at: relationship.createdAt, updated_at: relationship.updatedAt,
+    }));
+    const csv = `\uFEFF${[columns.map(csvCell).join(','), ...rows.map((row) => columns.map((column) => csvCell(row[column])).join(','))].join('\r\n')}\r\n`;
+    await fs.promises.writeFile(filePath, csv, 'utf8');
+    return { filePath };
   });
 
   ipcMain.handle('workspace:backup', async () => {

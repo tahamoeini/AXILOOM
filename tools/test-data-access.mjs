@@ -14,7 +14,7 @@ const { calculateMetrics, compactMetricsForCache, publicSnapshot } = require('..
 const { getBusinessSprintReport, listBusinessSprints } = require('../electron/business-sprint.cjs');
 const { getBusinessBoardReport, getCalendarPeriodReport, getDataGeneration, getIssueActivity, getIssueFilterOptions,
   getIssueOverviewStats, getMetricsGeneration, getCachedMetrics, getConfig, listIssues, openDatabase, saveConfig,
-  saveIssue, saveLocalIssueLink, saveSprint } = database;
+  saveIssue, saveLocalIssueLink, saveRecordRelationship, listRecordRelationships, archiveRecordRelationship, saveSprint } = database;
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'axiloom-data-access-'));
 const dbPath = path.join(temporaryDirectory, 'workspace.sqlite');
@@ -75,7 +75,7 @@ function runSnapshotWorker() {
 
 async function main() {
   let db = openDatabase(dbPath);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8, 'new workspace schema must be version 8');
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9, 'new workspace schema must be version 9');
   const config = saveConfig(db, {
     schemaVersion: 1, organization: { name: 'Example Organization', locale: 'en-US', timeZone: 'Europe/Berlin' },
     projects: ['REQUEST', 'BUILD', 'TRACK'],
@@ -115,6 +115,52 @@ async function main() {
     .run('request-1', 'request', 'Improve intake triage', JSON.stringify({ objectiveId: 'objective-1', primaryIssueKey: 'REQUEST-1' }), now, now);
   db.prepare('INSERT INTO record_events(record_id,event_type,occurred_at,payload_json) VALUES(?,?,?,?)').run('record-1', 'created', now, '{}');
 
+  const objectiveRequest = saveRecordRelationship(db, {
+    sourceType: 'record', sourceId: 'objective-1', targetType: 'record', targetId: 'request-1',
+    relationship: 'supports', evidence: 'Approved roadmap item links this request to the objective.',
+    sourceOrigin: 'decision-log', sourceReference: 'DEC-42', attributedTo: 'Product owner',
+  });
+  assert.equal(objectiveRequest.sourceLabel, 'Improve delivery flow · objective');
+  assert.equal(objectiveRequest.targetLabel, 'Improve intake triage · request');
+  assert.equal(objectiveRequest.sourceOrigin, 'decision-log');
+  assert.equal(objectiveRequest.attributedTo, 'Product owner');
+  assert.throws(() => saveRecordRelationship(db, {
+    sourceType: 'record', sourceId: 'objective-1', targetType: 'record', targetId: 'request-1',
+    relationship: 'supports', evidence: 'Duplicate', sourceOrigin: 'manual',
+  }), /already exists/);
+  const deliveryOutcome = saveRecordRelationship(db, {
+    sourceType: 'issue', sourceId: 'BUILD-1', targetType: 'record', targetId: 'record-1',
+    relationship: 'measures', evidence: 'Outcome reviewed against delivered issue evidence.',
+    sourceOrigin: 'jira', sourceReference: 'BUILD-1',
+  });
+  assert.match(deliveryOutcome.sourceLabel, /^BUILD-1 · Delivery work$/);
+  assert.equal(deliveryOutcome.targetId, 'record-1');
+  assert.throws(() => saveRecordRelationship(db, {
+    sourceType: 'issue', sourceId: 'MISSING-1', targetType: 'record', targetId: 'record-1',
+    relationship: 'related_to', evidence: 'Evidence', sourceOrigin: 'manual',
+  }), /not present in this workspace/);
+  assert.throws(() => saveRecordRelationship(db, {
+    sourceType: 'record', sourceId: 'record-1', targetType: 'record', targetId: 'record-1',
+    relationship: 'related_to', evidence: 'Evidence', sourceOrigin: 'manual',
+  }), /cannot point to itself/);
+  assert.throws(() => saveRecordRelationship(db, {
+    sourceType: 'record', sourceId: 'record-1', targetType: 'record', targetId: 'objective-1',
+    relationship: 'unknown', evidence: 'Evidence', sourceOrigin: 'manual',
+  }), /supported relationship/);
+  assert.throws(() => saveRecordRelationship(db, {
+    sourceType: 'record', sourceId: 'record-1', targetType: 'record', targetId: 'objective-1',
+    relationship: 'related_to', evidence: '', sourceOrigin: 'manual',
+  }), /evidence is required/);
+  assert.equal(archiveRecordRelationship(db, objectiveRequest.id).ok, true);
+  const restoredObjectiveRequest = saveRecordRelationship(db, {
+    sourceType: 'record', sourceId: 'objective-1', targetType: 'record', targetId: 'request-1',
+    relationship: 'supports', evidence: 'Evidence confirmed during review.', sourceOrigin: 'decision-log',
+    sourceReference: 'DEC-42', attributedTo: 'Product owner',
+  });
+  assert.equal(restoredObjectiveRequest.id, objectiveRequest.id, 'restoring an archived relationship preserves its stable identity');
+  assert.equal(listRecordRelationships(db).length, 2);
+  assert.deepEqual(restoredObjectiveRequest.history, undefined, 'record relationship history is loaded in snapshots, not from the save response');
+
   const initialMetricGeneration = getMetricsGeneration(db);
   const list = listIssues(db, { project: 'REQUEST', query: 'alpha', limit: 1, sortBy: 'key' });
   assert.equal(list.total, 1); assert.equal(list.items[0].key, 'REQUEST-1'); assert.equal(list.hasMore, false);
@@ -147,6 +193,9 @@ async function main() {
   assert.deepEqual(firstSnapshot.business.issues, [], 'intake rows use the paged report API');
   assert.ok(firstSnapshot.records.some((record) => record.id === 'objective-1' && record.kind === 'objective'), 'objective records remain available in the workspace snapshot');
   assert.ok(firstSnapshot.records.some((record) => record.id === 'request-1' && record.payload.objectiveId === 'objective-1'), 'request-to-objective references remain explicit');
+  assert.equal(firstSnapshot.relationships.length, 2, 'explicit record and Jira relationships are available to the renderer');
+  assert.equal(firstSnapshot.relationships.find((relationship) => relationship.id === objectiveRequest.id).history.length, 3, 'created, archived, and restored provenance events remain visible');
+  assert.equal(firstSnapshot.quality.evidence.recordRelationshipEvents, 4, 'relationship events remain part of the evidence inventory');
   assert.ok(firstSnapshot.links.some((record) => record.recordId === 'request-1'), 'product requests remain visible in issue-link summaries');
 
   db = openDatabase(dbPath);
@@ -201,7 +250,7 @@ async function main() {
   db.exec('ALTER TABLE business_issue_cache DROP COLUMN issue_type_name; PRAGMA user_version=7;');
   db.close();
   db = openDatabase(dbPath);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9);
   assert.ok(db.prepare('PRAGMA table_info(business_issue_cache)').all().some((column) => column.name === 'issue_type_name'));
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM business_issue_cache').get().count, 4);
   db.close();

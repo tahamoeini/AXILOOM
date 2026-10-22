@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Archive, CalendarPlus, Check, Clock3, Download, FileDown, FileUp, GitBranch, Plus, Search, UsersRound } from 'lucide-react';
 import RecordEditor from '../components/RecordEditor';
-import type { AppConfig, ExportReport, PageId, ProductRecord, RecordKind, Snapshot } from '../types';
+import type { AppConfig, ExportReport, PageId, ProductRecord, ProductRelationship, RecordKind, RecordTemplate, Snapshot } from '../types';
 import BusinessOrgAnalytics from '../components/BusinessOrgAnalytics';
 import { DataTable, EmptyState, IssueKey, SectionHeading, StatusBadge, formatDate, formatNumber } from '../components/Primitives';
 
@@ -90,12 +90,17 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
   pendingRecord?: { kind: RecordKind; record?: ProductRecord; nonce: number } | null;
   clearPending?: () => void;
 }) {
-  const targetKind = PAGE_KIND[page] || 'request';
+  const [strategyKind, setStrategyKind] = useState<RecordKind>('objective');
   const [editor, setEditor] = useState<{ kind: RecordKind; record?: ProductRecord } | null>(null);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
   const [importing, setImporting] = useState(false);
   const icsInput = useRef<HTMLInputElement>(null);
+  const strategyTemplates = (config?.recordTemplates || []).filter((template) => template.enabled && template.group === 'strategy');
+  const targetKind = page === 'objectives' && strategyTemplates.length
+    ? (strategyTemplates.some((template) => template.kind === strategyKind) ? strategyKind : strategyTemplates[0].kind)
+    : PAGE_KIND[page] || 'request';
+  const activeTemplate = (config?.recordTemplates || []).find((template) => template.kind === targetKind && template.enabled);
 
   useEffect(() => {
     if (!pendingRecord || pendingRecord.kind !== targetKind) return;
@@ -113,6 +118,22 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
   const decisionOptions = snapshot.records.filter((record) => record.kind === 'decision').map((record) => ({ id: record.id, title: record.title }));
   const actionOptions = snapshot.records.filter((record) => record.kind === 'action').map((record) => ({ id: record.id, title: record.title }));
   const objectiveOptions = snapshot.records.filter((record) => record.kind === 'objective').map((record) => ({ id: record.id, title: record.title }));
+
+  const saveRelationship = async (input: Parameters<typeof window.axiloom.saveRecordRelationship>[0]) => {
+    await window.axiloom.saveRecordRelationship(input);
+    await refresh();
+    notify('ارتباط صریح همراه با مدرک و مبدأ ثبت شد.');
+  };
+  const archiveRelationship = async (relationship: ProductRelationship) => {
+    if (!window.confirm(`ارتباط «${relationship.sourceLabel} → ${relationship.targetLabel}» از نمایش فعال خارج شود؟ سابقهٔ آن باقی می‌ماند.`)) return;
+    await window.axiloom.archiveRecordRelationship(relationship.id);
+    await refresh();
+    notify('ارتباط بایگانی شد و سابقهٔ آن حفظ شد.');
+  };
+  const exportRelationships = async () => {
+    const result = await window.axiloom.exportRecordRelationships();
+    if (result.filePath) notify(`رابطه‌ها در ${result.filePath} خروجی گرفته شدند.`);
+  };
 
   const saveCurrent = async (kind: RecordKind, title: string, payload: Record<string, unknown>, id?: string) => {
     await saveRecord(kind, title, payload, id);
@@ -133,14 +154,14 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
   }
 
   function rowsForPage(): ReactNode[][] {
-    if (targetKind === 'objective') return records.map((record) => {
-      const related = snapshot.records.filter((item) => item.payload.objectiveId === record.id);
-      const requests = related.filter((item) => item.kind === 'request').length;
-      const outcomes = related.filter((item) => item.kind === 'outcome').length;
-      const decisions = related.filter((item) => item.kind === 'decision').length;
-      const actionsCount = related.filter((item) => item.kind === 'action').length;
-      const meetings = related.filter((item) => item.kind === 'meeting').length;
-      return [<b className="row-title">{record.title}</b>, String(record.payload.ownerName || '—'), String(record.payload.strategicTheme || '—'), <StatusBadge value={String(record.payload.status || 'Proposed')} />, formatDate(String(record.payload.dueAt || '')), `${requests} requests · ${decisions} decisions · ${meetings} meetings · ${actionsCount} actions · ${outcomes} outcomes`, actions(record)];
+    if (page === 'objectives') return records.map((record) => {
+      const relationCount = snapshot.relationships.filter((relationship) =>
+        (relationship.sourceType === 'record' && relationship.sourceId === record.id)
+        || (relationship.targetType === 'record' && relationship.targetId === record.id)).length;
+      return [String((config?.recordTemplates || []).find((template) => template.kind === record.kind)?.label || record.kind),
+        <b className="row-title">{record.title}</b>, String(record.payload.ownerName || '—'),
+        <StatusBadge value={String(record.payload.status || 'Proposed')} />, formatDate(String(record.payload.dueAt || '')),
+        `${formatNumber(relationCount, 0)} audited links`, actions(record)];
     });
     if (targetKind === 'action') return records.map((record) => {
       const due = String(record.payload.dueAt || '');
@@ -212,14 +233,14 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
     return summaryOnly ? window.axiloom.exportPdf(report) : window.axiloom.exportXlsx(report);
   }
 
-  const headers = targetKind === 'objective' ? ['Objective', 'Owner', 'Strategic theme', 'Status', 'Target date', 'Traceability', '']
+  const headers = page === 'objectives' ? ['نوع ثبت', 'عنوان', 'مسئول', 'وضعیت', 'موعد', 'ارتباطات صریح', '']
     : targetKind === 'action' ? ['تعهد', 'مالک', 'درخواست‌دهنده', 'موعد', 'وضعیت', 'وابستگی / انتظار', 'پیگیری Jira', '']
     : targetKind === 'request' ? ['درخواست محصول', 'درخواست‌دهنده / واحد', 'مالک محصول', 'وضعیت', 'اهمیت', 'مرجع بیرونی', 'سن مشاهده‌شده', 'تحویل مرتبط', '']
       : targetKind === 'decision' ? ['عنوان تصمیم', 'تاریخ', 'تصمیم‌گیر', 'Jira related', 'جلسه', 'وضعیت', 'تصمیم صریح', '']
         : targetKind === 'meeting' ? ['تاریخ', 'جلسه', 'نوع', 'شرکت‌کنندگان', 'Jira مرتبط', 'تصمیم', 'Action', '']
           : targetKind === 'outcome' ? ['Issue مرتبط', 'Objective', 'Outcome / فرضیه', 'سنجه', 'Baseline', 'Target', 'Actual', 'مالک', 'بازبینی', 'اعتبار', '']
             : ['ذی‌نفع', 'واحد', 'نقش', 'مسئول ارتباط', 'مرجع بیرونی', ''];
-  const title = PAGE_NAMES[page] || 'مدیریت محصول';
+  const title = page === 'objectives' ? `Product / Initiative / Objective · ${activeTemplate?.label || 'Register'}` : PAGE_NAMES[page] || 'مدیریت محصول';
 
   return <>
     {(page === 'requests' || page === 'stakeholders') && <BusinessOrgAnalytics snapshot={snapshot} config={config} setConfig={setConfig} editor={page === 'stakeholders'} />}
@@ -230,11 +251,13 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
     <section className="panel product-toolbar">
       <div className="product-toolbar-title"><span className="filter-mark"><UsersRound size={16} /></span><div><b>{title}</b><small>{formatNumber(allRecords.length, 0)} ثبت فعال در فضای محلی</small></div></div>
       <div className="product-toolbar-actions">
+        {page === 'objectives' && strategyTemplates.map((template) => <button key={template.kind} className={`button tiny ${targetKind === template.kind ? 'primary' : 'secondary'}`} onClick={() => setStrategyKind(template.kind)}>{template.label}</button>)}
         <label className="compact-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجو در عنوان و جزئیات" /></label>
         <select className="compact-select" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">همهٔ وضعیت‌ها</option>{statuses.map((value) => <option key={value}>{value}</option>)}</select>
         {targetKind === 'meeting' && <><input ref={icsInput} type="file" accept="text/calendar,.ics" hidden onChange={(event) => { importIcs(event.target.files?.[0]); event.currentTarget.value = ''; }} /><button className="button secondary" onClick={() => icsInput.current?.click()} disabled={importing}><FileUp size={15} />{importing ? 'در حال خواندن…' : 'ورود ICS'}</button></>}
+        <button className="button tiny secondary" onClick={() => void exportRelationships()} title="Export active record and Jira relationships with provenance"><GitBranch size={14} /> Export relationships</button>
         <button className="button tiny secondary" onClick={() => exportProductReport(false)}><FileDown size={14} /> XLSX</button><button className="button tiny secondary" onClick={() => exportProductReport(true)}><Download size={14} /> PDF</button>
-        <button className="button primary" onClick={() => createRecord(targetKind)}><Plus size={16} /> ثبت {targetKind === 'objective' ? 'هدف' : targetKind === 'action' ? 'تعهد' : targetKind === 'meeting' ? 'جلسه' : targetKind === 'outcome' ? 'Outcome' : targetKind === 'decision' ? 'تصمیم' : targetKind === 'stakeholder' ? 'ذی‌نفع' : 'درخواست'}</button>
+        <button className="button primary" onClick={() => createRecord(targetKind)}><Plus size={16} /> ثبت {activeTemplate?.label || targetKind}</button>
       </div>
     </section>
 
@@ -243,11 +266,11 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
     </section>}
 
     <section className="panel table-panel">
-      <SectionHeading title={targetKind === 'objective' ? 'Objective register' : targetKind === 'request' ? 'صف درخواست‌های محصول' : targetKind === 'action' ? 'فهرست تعهدها' : targetKind === 'decision' ? 'Decision Log' : targetKind === 'meeting' ? 'Meeting Log' : targetKind === 'outcome' ? 'Outcome Register' : 'ذی‌نفعان'} hint={targetKind === 'meeting' ? 'شناسهٔ ICS و تاریخ، import تکراری را به همان ثبت وصل می‌کنند.' : targetKind === 'decision' ? 'Decision ID، جلسه، Jira issues and commitments در سابقهٔ محلی قابل پیگیری‌اند.' : undefined} />
-      {records.length ? <DataTable headers={headers} rows={rowsForPage()} /> : <EmptyState title={targetKind === 'objective' ? 'No objectives recorded' : targetKind === 'request' ? 'درخواستی ثبت نشده' : targetKind === 'action' ? 'تعهدی ثبت نشده' : targetKind === 'decision' ? 'تصمیمی ثبت نشده' : targetKind === 'meeting' ? 'جلسه‌ای ثبت نشده' : targetKind === 'outcome' ? 'Outcomeی ثبت نشده' : 'ذی‌نفعی ثبت نشده'} detail={targetKind === 'meeting' ? 'فایل ICS محلی وارد کنید یا جلسه را دستی ثبت کنید.' : 'ثبت جدید به‌صورت محلی ذخیره می‌شود و پس از اجرای دوباره باقی می‌ماند.'} action={<button className="button small primary" onClick={() => createRecord(targetKind)}><Plus size={15} /> ثبت مورد جدید</button>} />}
+      <SectionHeading title={page === 'objectives' ? `${activeTemplate?.label || 'Product'} register` : activeTemplate?.label || PAGE_NAMES[page] || 'Product register'} hint={targetKind === 'meeting' ? 'شناسهٔ ICS و تاریخ، import تکراری را به همان ثبت وصل می‌کنند.' : targetKind === 'decision' ? 'Decision ID، جلسه، Jira issues and commitments در سابقهٔ محلی قابل پیگیری‌اند.' : undefined} />
+      {records.length ? <DataTable headers={headers} rows={rowsForPage()} /> : <EmptyState title={`No ${activeTemplate?.label || targetKind} records`} detail={targetKind === 'meeting' ? 'فایل ICS محلی وارد کنید یا جلسه را دستی ثبت کنید.' : 'ثبت جدید به‌صورت محلی ذخیره می‌شود و پس از اجرای دوباره باقی می‌ماند.'} action={<button className="button small primary" onClick={() => createRecord(targetKind)}><Plus size={15} /> ثبت مورد جدید</button>} />}
     </section>
 
     {targetKind === 'action' && dueSoon.length > 0 && <div className="callout amber"><Clock3 size={15} /><span>{formatNumber(dueSoon.length, 0)} تعهد موعد مشخص دارد. اگر وضعیت انتظار از پاسخ بیرونی است، مسئول پاسخ و وابستگی را ثبت کنید تا تأخیر به فرد محصول نسبت داده نشود.</span></div>}
-    {editor && <RecordEditor kind={editor.kind} record={editor.record} jiraUrl={jiraUrl} close={() => setEditor(null)} save={saveCurrent} meetingOptions={meetingOptions} decisionOptions={decisionOptions} actionOptions={actionOptions} objectiveOptions={objectiveOptions} />}
+    {editor && <RecordEditor kind={editor.kind} template={(config?.recordTemplates || []).find((item) => item.kind === editor.kind)} record={editor.record} jiraUrl={jiraUrl} close={() => setEditor(null)} save={saveCurrent} recordOptions={snapshot.records} relationships={snapshot.relationships} onSaveRelationship={saveRelationship} onArchiveRelationship={archiveRelationship} meetingOptions={meetingOptions} decisionOptions={decisionOptions} actionOptions={actionOptions} objectiveOptions={objectiveOptions} />}
   </>;
 }

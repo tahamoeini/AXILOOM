@@ -165,6 +165,37 @@ function openDatabase(filePath) {
       payload_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_record_events_record ON record_events(record_id, occurred_at);
+    CREATE TABLE IF NOT EXISTS record_relationships (
+      id TEXT PRIMARY KEY,
+      source_type TEXT NOT NULL CHECK(source_type IN ('record','issue')),
+      source_id TEXT NOT NULL,
+      target_type TEXT NOT NULL CHECK(target_type IN ('record','issue')),
+      target_id TEXT NOT NULL,
+      relationship TEXT NOT NULL CHECK(relationship IN ('related_to','supports','implements','depends_on','decides','delivers','measures','supersedes','informs')),
+      evidence TEXT NOT NULL CHECK(length(trim(evidence)) > 0),
+      source_origin TEXT NOT NULL CHECK(source_origin IN ('manual','meeting','decision-log','imported-document','jira','other')),
+      source_reference TEXT NOT NULL DEFAULT '',
+      attributed_to TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      CHECK(source_type <> target_type OR source_id <> target_id),
+      UNIQUE(source_type,source_id,target_type,target_id,relationship)
+    );
+    CREATE INDEX IF NOT EXISTS idx_record_relationship_source ON record_relationships(source_type,source_id,archived_at);
+    CREATE INDEX IF NOT EXISTS idx_record_relationship_target ON record_relationships(target_type,target_id,archived_at);
+    CREATE TABLE IF NOT EXISTS record_relationship_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      relationship_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      occurred_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_record_relationship_events_id ON record_relationship_events(relationship_id,occurred_at,id);
     CREATE TABLE IF NOT EXISTS local_issue_links (
       id TEXT PRIMARY KEY,
       business_issue_key TEXT NOT NULL,
@@ -282,7 +313,7 @@ function migrateReportAndIssueIndexes(db) {
     CREATE INDEX IF NOT EXISTS idx_jira_issues_project_status_key ON jira_issues(project_key,status_name,issue_key);
     CREATE INDEX IF NOT EXISTS idx_jira_issues_project_created_key ON jira_issues(project_key,created_at,issue_key);
   `);
-  const tables = ['jira_issues','jira_issue_tombstones','jira_issue_revisions','jira_issue_history','jira_sprints','jira_sprint_revisions','settings','product_records','record_events','local_issue_links','local_issue_link_events','import_runs','import_files','import_conflicts','sync_state'];
+  const tables = ['jira_issues','jira_issue_tombstones','jira_issue_revisions','jira_issue_history','jira_sprints','jira_sprint_revisions','settings','product_records','record_events','record_relationships','record_relationship_events','local_issue_links','local_issue_link_events','import_runs','import_files','import_conflicts','sync_state'];
   for (const table of tables) {
     for (const action of ['INSERT','UPDATE','DELETE']) {
       const trigger = `generation_${table}_${action.toLowerCase()}`;
@@ -303,7 +334,7 @@ function migrateReportAndIssueIndexes(db) {
     CREATE TRIGGER IF NOT EXISTS metrics_generation_settings_delete AFTER DELETE ON settings
     WHEN OLD.key='config' BEGIN UPDATE workspace_generation SET metrics_generation=metrics_generation+1 WHERE id=1; END;`);
   const version = Number(db.prepare('PRAGMA user_version').get().user_version || 0);
-  if (version < 8) db.exec('PRAGMA user_version=8');
+  if (version < 9) db.exec('PRAGMA user_version=9');
 }
 
 function getDataGeneration(db) {
@@ -962,6 +993,151 @@ function removeLocalIssueLink(db, id) {
   }
 }
 
+const PRODUCT_RELATIONSHIP_KINDS = new Set(['related_to','supports','implements','depends_on','decides','delivers','measures','supersedes','informs']);
+const PRODUCT_RELATIONSHIP_ORIGINS = new Set(['manual','meeting','decision-log','imported-document','jira','other']);
+
+function normalizeRelationshipEndpoint(typeValue, idValue, label) {
+  const type = String(typeValue || '').trim();
+  if (!['record', 'issue'].includes(type)) throw new Error(`${label} must be a record or imported issue.`);
+  const id = String(idValue || '').trim();
+  if (!id || id.length > 160) throw new Error(`${label} identifier is required and must be 160 characters or fewer.`);
+  if (type === 'issue') {
+    const issueKey = id.toUpperCase();
+    if (!/^[A-Z][A-Z0-9_]*-\d+$/.test(issueKey)) throw new Error(`${label} issue key is invalid.`);
+    return { type, id: issueKey };
+  }
+  return { type, id };
+}
+
+function assertRelationshipEndpointExists(db, endpoint, label) {
+  if (endpoint.type === 'record') {
+    const record = db.prepare('SELECT id FROM product_records WHERE id=? AND archived_at IS NULL').get(endpoint.id);
+    if (!record) throw new Error(`${label} record does not exist or is archived in this workspace.`);
+    return;
+  }
+  const issue = db.prepare(`SELECT issue_key FROM jira_issues WHERE issue_key=?
+    UNION ALL SELECT issue_key FROM jira_issue_tombstones WHERE issue_key=? LIMIT 1`).get(endpoint.id, endpoint.id);
+  if (!issue) throw new Error(`${label} issue is not present in this workspace.`);
+}
+
+function relationshipEvent(db, relationship, eventType, before, after, occurredAt) {
+  db.prepare(`INSERT INTO record_relationship_events(relationship_id,event_type,occurred_at,payload_json,source_type,source_id,target_type,target_id)
+    VALUES(?,?,?,?,?,?,?,?)`).run(relationship.id, eventType, occurredAt, JSON.stringify({ before, after }),
+    relationship.source_type, relationship.source_id, relationship.target_type, relationship.target_id);
+}
+
+function saveRecordRelationship(db, input) {
+  const source = normalizeRelationshipEndpoint(input?.sourceType, input?.sourceId, 'Source');
+  const target = normalizeRelationshipEndpoint(input?.targetType, input?.targetId, 'Target');
+  if (source.type === target.type && source.id === target.id) throw new Error('A relationship cannot point to itself.');
+  const relationship = String(input?.relationship || '').trim();
+  if (!PRODUCT_RELATIONSHIP_KINDS.has(relationship)) throw new Error('Choose a supported relationship type.');
+  const evidence = String(input?.evidence || '').trim();
+  if (!evidence || evidence.length > 4000) throw new Error('Relationship evidence is required and must be 4,000 characters or fewer.');
+  const sourceOrigin = String(input?.sourceOrigin || '').trim();
+  if (!PRODUCT_RELATIONSHIP_ORIGINS.has(sourceOrigin)) throw new Error('Choose a supported relationship source origin.');
+  const sourceReference = String(input?.sourceReference || '').trim();
+  const attributedTo = String(input?.attributedTo || '').trim();
+  if (sourceReference.length > 2000) throw new Error('Relationship source reference must be 2,000 characters or fewer.');
+  if (attributedTo.length > 200) throw new Error('Relationship attribution must be 200 characters or fewer.');
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    assertRelationshipEndpointExists(db, source, 'Source');
+    assertRelationshipEndpointExists(db, target, 'Target');
+    const identity = [source.type, source.id, target.type, target.id, relationship];
+    const existing = input.id
+      ? db.prepare('SELECT * FROM record_relationships WHERE id=?').get(String(input.id))
+      : db.prepare('SELECT * FROM record_relationships WHERE source_type=? AND source_id=? AND target_type=? AND target_id=? AND relationship=?').get(...identity);
+    const now = new Date().toISOString();
+    let id;
+    let eventType;
+    let before = null;
+    if (existing) {
+      if (input.id && (existing.source_type !== source.type || existing.source_id !== source.id || existing.target_type !== target.type || existing.target_id !== target.id || existing.relationship !== relationship)) {
+        throw new Error('Relationship endpoints and type are immutable. Create a separate relationship to change them.');
+      }
+      if (!input.id && !existing.archived_at) throw new Error('This explicit relationship already exists in the workspace.');
+      before = existing;
+      id = existing.id;
+      eventType = existing.archived_at ? 'restored' : 'updated';
+      db.prepare(`UPDATE record_relationships SET evidence=?,source_origin=?,source_reference=?,attributed_to=?,updated_at=?,archived_at=NULL WHERE id=?`)
+        .run(evidence, sourceOrigin, sourceReference, attributedTo, now, id);
+    } else {
+      if (input.id) throw new Error('The relationship being edited no longer exists.');
+      id = randomUUID();
+      eventType = 'created';
+      db.prepare(`INSERT INTO record_relationships(id,source_type,source_id,target_type,target_id,relationship,evidence,source_origin,source_reference,attributed_to,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, source.type, source.id, target.type, target.id, relationship, evidence, sourceOrigin, sourceReference, attributedTo, now, now);
+    }
+    const after = db.prepare('SELECT * FROM record_relationships WHERE id=?').get(id);
+    const changed = !before || before.archived_at || before.evidence !== evidence || before.source_origin !== sourceOrigin
+      || before.source_reference !== sourceReference || before.attributed_to !== attributedTo;
+    if (changed) relationshipEvent(db, after, eventType, before, after, now);
+    db.exec('COMMIT');
+    return mapProductRelationship(db, after);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function mapProductRelationship(db, row) {
+  const recordLabel = (id) => db.prepare('SELECT kind,title FROM product_records WHERE id=?').get(id);
+  const issueLabel = (key) => db.prepare('SELECT summary_text FROM jira_issues WHERE issue_key=?').get(key);
+  const label = (type, id) => {
+    if (type === 'record') {
+      const record = recordLabel(id);
+      return record ? `${record.title} · ${record.kind}` : id;
+    }
+    const issue = issueLabel(id);
+    return issue?.summary_text ? `${id} · ${issue.summary_text}` : id;
+  };
+  return {
+    id: row.id,
+    sourceType: row.source_type, sourceId: row.source_id, sourceLabel: label(row.source_type, row.source_id),
+    targetType: row.target_type, targetId: row.target_id, targetLabel: label(row.target_type, row.target_id),
+    relationship: row.relationship, evidence: row.evidence, sourceOrigin: row.source_origin,
+    sourceReference: row.source_reference, attributedTo: row.attributed_to,
+    createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+
+function listRecordRelationships(db) {
+  const rows = db.prepare('SELECT * FROM record_relationships WHERE archived_at IS NULL ORDER BY updated_at DESC,id').all();
+  const historyRows = db.prepare(`SELECT relationship_id,event_type,occurred_at,payload_json FROM (
+      SELECT relationship_id,event_type,occurred_at,payload_json,id,
+        ROW_NUMBER() OVER (PARTITION BY relationship_id ORDER BY occurred_at DESC,id DESC) AS event_rank
+      FROM record_relationship_events
+    ) WHERE event_rank <= 10 ORDER BY occurred_at DESC,id DESC`).all();
+  const historyById = new Map();
+  historyRows.forEach((event) => {
+    if (!historyById.has(event.relationship_id)) historyById.set(event.relationship_id, []);
+    let payload = {};
+    try { payload = JSON.parse(event.payload_json); } catch { /* Keep malformed legacy event details empty and visible by event type/time. */ }
+    historyById.get(event.relationship_id).push({ eventType: event.event_type, occurredAt: event.occurred_at, payload });
+  });
+  return rows.map((row) => ({ ...mapProductRelationship(db, row), history: historyById.get(row.id) || [] }));
+}
+
+function archiveRecordRelationship(db, idValue) {
+  const id = String(idValue || '').trim();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const existing = db.prepare('SELECT * FROM record_relationships WHERE id=? AND archived_at IS NULL').get(id);
+    if (!existing) { db.exec('COMMIT'); return { ok: false }; }
+    const now = new Date().toISOString();
+    db.prepare('UPDATE record_relationships SET archived_at=?,updated_at=? WHERE id=?').run(now, now, id);
+    const after = db.prepare('SELECT * FROM record_relationships WHERE id=?').get(id);
+    relationshipEvent(db, after, 'archived', existing, after, now);
+    db.exec('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 function safeJson(value, fallback) {
   try { return value == null ? fallback : JSON.parse(value); } catch { return fallback; }
 }
@@ -1373,6 +1549,7 @@ function readRows(db, table, order = '') {
 module.exports = {
   openDatabase, getConfig, saveConfig, saveIssue, saveSprint, readRows, routeForBoard,
   saveLocalIssueLink, removeLocalIssueLink, getIssueDetails, getSprintDetails,
+  saveRecordRelationship, listRecordRelationships, archiveRecordRelationship,
   listLocalIssueLinks, mergeIssueHistoryPage, getIssueActivity, getDataGeneration, getMetricsGeneration, getCachedReport, saveCachedReport,
   getCachedMetrics, saveCachedMetrics,
   saveBusinessIssueCache, getBusinessBoardReport,

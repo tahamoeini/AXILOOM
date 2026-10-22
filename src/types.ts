@@ -1,5 +1,22 @@
 export type PageId = 'overview' | 'delivery' | 'portfolio' | 'business' | 'objectives' | 'requests' | 'actions' | 'decisions' | 'meetings' | 'outcomes' | 'stakeholders' | 'quality' | 'settings' | 'definitions';
-export type RecordKind = 'objective' | 'action' | 'request' | 'decision' | 'meeting' | 'outcome' | 'stakeholder';
+export type RecordKind = 'product' | 'initiative' | 'objective' | 'action' | 'request' | 'decision' | 'meeting' | 'outcome' | 'stakeholder' | (string & {});
+export type RecordFieldType = 'text' | 'textarea' | 'date' | 'enum' | 'recordRef' | 'issueRef' | 'issueRefList' | 'number' | 'boolean';
+export interface RecordFieldTemplate {
+  key: string; label: string; type: RecordFieldType; required: boolean; options: string[]; referenceKinds: string[];
+}
+export interface RecordTemplate {
+  kind: RecordKind; label: string; group: string; enabled: boolean; fields: RecordFieldTemplate[];
+}
+export type ProductRelationshipKind = 'related_to' | 'supports' | 'implements' | 'depends_on' | 'decides' | 'delivers' | 'measures' | 'supersedes' | 'informs';
+export interface ProductRelationship {
+  id: string;
+  sourceType: 'record' | 'issue'; sourceId: string; sourceLabel: string;
+  targetType: 'record' | 'issue'; targetId: string; targetLabel: string;
+  relationship: ProductRelationshipKind;
+  evidence: string; sourceOrigin: 'manual' | 'meeting' | 'decision-log' | 'imported-document' | 'jira' | 'other';
+  sourceReference: string; attributedTo: string; createdAt: string; updatedAt: string;
+  history?: Array<{ eventType: string; occurredAt: string; payload: Record<string, unknown> }>;
+}
 
 export interface ProductRecord {
   id: string;
@@ -36,6 +53,7 @@ export interface Snapshot {
   issueTotal: number;
   epics: Array<Record<string, any>>;
   records: ProductRecord[];
+  relationships: ProductRelationship[];
   links: Array<Record<string, any>>;
   business: {
     summary: Record<string, number>;
@@ -57,7 +75,7 @@ export interface Snapshot {
     incompleteHistories: number;
     issuesWithoutHistory: number;
     conflicts: number;
-    evidence: { issueRevisions: number; issueHistoryEvents: number; sprintRevisions: number; localLinkEvents: number };
+    evidence: { issueRevisions: number; issueHistoryEvents: number; sprintRevisions: number; localLinkEvents: number; recordRelationshipEvents: number };
   };
   importRuns: Array<Record<string, any>>;
 }
@@ -201,6 +219,7 @@ export interface AppConfig {
   workflows: Record<string, WorkflowConfiguration>;
   calendar: { configured: boolean; timeZone: string; workingDays: number[]; hoursPerDay: number; holidays: string[]; workIntervals: Array<Record<string, any>> };
   modules: Record<string, boolean>;
+  recordTemplates: RecordTemplate[];
   hoursPerDay: number;
   doneStatuses: string[];
   adhocTag: string;
@@ -286,6 +305,9 @@ export interface AxiloomApi {
   finishImport: (note?: string | null) => Promise<{ issueCount: number }>;
   saveRecord: (record: { id?: string; kind: RecordKind; title: string; payload: Record<string, unknown> }) => Promise<ProductRecord>;
   archiveRecord: (id: string) => Promise<{ ok: boolean }>;
+  saveRecordRelationship: (input: { id?: string; sourceType: 'record' | 'issue'; sourceId: string; targetType: 'record' | 'issue'; targetId: string; relationship: ProductRelationshipKind; evidence: string; sourceOrigin: ProductRelationship['sourceOrigin']; sourceReference?: string; attributedTo?: string }) => Promise<ProductRelationship>;
+  archiveRecordRelationship: (id: string) => Promise<{ ok: boolean }>;
+  exportRecordRelationships: () => Promise<{ canceled?: boolean; filePath?: string }>;
   backup: () => Promise<{ canceled?: boolean; filePath?: string }>;
   restore: () => Promise<{ canceled?: boolean; restored?: boolean }>;
   exportXlsx: (report: ExportReport) => Promise<{ canceled?: boolean; filePath?: string }>;
