@@ -36,7 +36,7 @@ export default function Overview({ snapshot, config, goTo, openIssue }: { snapsh
     return()=>{active=false;};
   },[currentUser,followUpProject,followUpAssignments.map((assignment)=>assignment.workflowScope+':'+assignment.project).join('|'),snapshot.summary.issueCount,snapshot.summary.lastIssueUpdate]);
   const projectTotal = Math.max(1, ...snapshot.summary.projectCounts.map((item) => item.count));
-  const ready = snapshot.summary.issueCount > 0 || snapshot.records.length > 0;
+  const ready = snapshot.summary.issueCount > 0 || snapshot.summary.recordCount > 0;
 
   if (!ready) return <>
     <div className="welcome-panel"><div className="welcome-content"><span className="welcome-kicker"><Sparkles size={15} /> فضای کاری آماده است</span><h2>گزارش Jira و پیگیری‌های محصول، یک‌جا</h2><p>خروجی issue و sprint را وارد کنید یا Jira داخلی را در تنظیمات وصل کنید. محاسبه‌ها روی همین رایانه انجام می‌شوند.</p><div className="welcome-actions"><button className="button primary" onClick={() => document.querySelector<HTMLInputElement>('input[type=file]')?.click()}><TicketCheck size={16} /> ورود فایل‌های Jira</button><button className="button secondary" onClick={() => goTo('settings')}>تنظیم اتصال Jira <ArrowLeft size={15} /></button></div></div><div className="welcome-art"><div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" /><div className="art-core"><Rocket size={34} /></div><span className="art-node node-one"><GitBranch size={16} /></span><span className="art-node node-two"><Target size={16} /></span><span className="art-node node-three"><ListTodo size={16} /></span></div></div>

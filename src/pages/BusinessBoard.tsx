@@ -144,7 +144,7 @@ export default function BusinessBoard({ snapshot, config, openIssue, createRecor
     await window.axiloom.exportXlsx(reportData);
   }
 
-  const matchingRecords = snapshot.records.filter((record) => report.aggregates.matchingRecordIds.includes(record.id));
+  const matchingRecordCount = report.aggregates.matchingRecordIds.length;
   const openRequests = snapshot.business.summary.open || 0;
   const doneRequests = snapshot.business.summary.done || 0;
 
@@ -184,7 +184,7 @@ export default function BusinessBoard({ snapshot, config, openIssue, createRecor
           issue.linkedTechnicalKeys.length ? issue.linkedTechnicalKeys.map((key: string) => <IssueKey key={key} value={key} onOpen={openIssue} />) : '—',
           issue.linkedProducts.length ? issue.linkedProducts.map((record: any) => <span key={record.id}>{record.kind} · {record.title}<br /></span>) : '—'])}
         empty="No matching intake issues." serverPagination={{ offset: report.offset, limit: report.limit, total: report.total, loading, onPageChange: (value) => setPage(Math.floor(value / 50)) }} />
-      {matchingRecords.length > 0 && <p className="data-source-note">{matchingRecords.length} explicitly related product record(s) are included in the current report.</p>}
+      {matchingRecordCount > 0 && <p className="data-source-note">{matchingRecordCount} explicitly related product record(s) are included in the current report.</p>}
     </section>
     {config?.modules.businessSprint && <section className="panel business-sprint-panel">
       <SectionHeading title="Sprint commitments" hint="Entry states and milestones follow the configured commitment workflow." action={<button className="button tiny secondary" disabled={!sprintReport} onClick={() => void exportSprint()}><FileDown size={15} /> Export</button>} />

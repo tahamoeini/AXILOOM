@@ -1,7 +1,7 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const { DatabaseSync } = require('node:sqlite');
 const {
-  getIssueDetails, getIssueActivity, getSprintDetails, listIssues,
+  getIssueDetails, getIssueActivity, getSprintDetails, listIssues, listRecords,
   getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport, getBusinessBoardReport,
 } = require('./database.cjs');
 const { listBusinessSprints, getBusinessSprintReport } = require('./business-sprint.cjs');
@@ -11,6 +11,7 @@ const readers = {
   getIssueActivity,
   getSprintDetails,
   listIssues,
+  listRecords,
   getIssueFilterOptions,
   getIssueOverviewStats,
   getCalendarPeriodReport,

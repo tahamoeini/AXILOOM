@@ -13,7 +13,7 @@ const database = require('../electron/database.cjs');
 const { calculateMetrics, compactMetricsForCache, publicSnapshot } = require('../electron/metrics.cjs');
 const { getBusinessSprintReport, listBusinessSprints } = require('../electron/business-sprint.cjs');
 const { getBusinessBoardReport, getCalendarPeriodReport, getDataGeneration, getIssueActivity, getIssueFilterOptions,
-  getIssueOverviewStats, getMetricsGeneration, getCachedMetrics, getConfig, listIssues, openDatabase, saveConfig,
+  getIssueOverviewStats, getMetricsGeneration, getCachedMetrics, getConfig, listIssues, listRecords, openDatabase, saveConfig,
   saveIssue, saveLocalIssueLink, saveRecordRelationship, listRecordRelationships, archiveRecordRelationship, saveSprint } = database;
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'axiloom-data-access-'));
@@ -75,7 +75,7 @@ function runSnapshotWorker() {
 
 async function main() {
   let db = openDatabase(dbPath);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9, 'new workspace schema must be version 9');
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 10, 'new workspace schema must be version 10');
   const config = saveConfig(db, {
     schemaVersion: 1, organization: { name: 'Example Organization', locale: 'en-US', timeZone: 'Europe/Berlin' },
     projects: ['REQUEST', 'BUILD', 'TRACK'],
@@ -114,6 +114,17 @@ async function main() {
   db.prepare('INSERT INTO product_records(id,kind,title,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)')
     .run('request-1', 'request', 'Improve intake triage', JSON.stringify({ objectiveId: 'objective-1', primaryIssueKey: 'REQUEST-1' }), now, now);
   db.prepare('INSERT INTO record_events(record_id,event_type,occurred_at,payload_json) VALUES(?,?,?,?)').run('record-1', 'created', now, '{}');
+  const objectivePage = listRecords(db, { kind: 'objective', limit: 1 });
+  assert.equal(objectivePage.total, 1); assert.equal(objectivePage.items[0].id, 'objective-1');
+  assert.equal(objectivePage.hasMore, false);
+  assert.ok(listRecords(db, { query: 'request-1', limit: 10 }).items.some((item) => item.id === 'request-1'), 'SQL record search includes stable identifiers');
+  assert.deepEqual(listRecords(db, { relatedIssueKey: 'REQUEST-1', limit: 10 }).items.map((item) => item.id).sort(), ['objective-1', 'record-1', 'request-1']);
+  assert.equal(objectivePage.legacyObjectiveCounts['objective-1'], 1, 'legacy objective references remain countable without loading all records');
+  for (let index = 0; index < 12; index += 1) db.prepare('INSERT INTO record_events(record_id,event_type,occurred_at,payload_json) VALUES(?,?,?,?)')
+    .run('objective-1', 'updated', new Date(Date.parse(now) + index).toISOString(), '{}');
+  assert.equal(listRecords(db, { ids: ['objective-1'], limit: 1 }).items[0].history.length, 10, 'record history is bounded to ten events per requested row');
+  const recordPlan = db.prepare(`EXPLAIN QUERY PLAN SELECT id FROM product_records WHERE kind='objective' AND archived_at IS NULL ORDER BY updated_at DESC,id LIMIT 50`).all();
+  assert.ok(recordPlan.some((row) => String(row.detail).includes('idx_product_records_active_page')), 'active record pages use the dedicated compound index');
 
   const objectiveRequest = saveRecordRelationship(db, {
     sourceType: 'record', sourceId: 'objective-1', targetType: 'record', targetId: 'request-1',
@@ -191,8 +202,8 @@ async function main() {
   const firstSnapshot = await runSnapshotWorker();
   assert.deepEqual(firstSnapshot.issues, [], 'full Jira issue rows must not be transferred in the page snapshot');
   assert.deepEqual(firstSnapshot.business.issues, [], 'intake rows use the paged report API');
-  assert.ok(firstSnapshot.records.some((record) => record.id === 'objective-1' && record.kind === 'objective'), 'objective records remain available in the workspace snapshot');
-  assert.ok(firstSnapshot.records.some((record) => record.id === 'request-1' && record.payload.objectiveId === 'objective-1'), 'request-to-objective references remain explicit');
+  assert.deepEqual(firstSnapshot.records, [], 'product records must be fetched through the paged records API');
+  assert.equal(firstSnapshot.summary.recordCount, 3, 'workspace snapshot retains an active product-record count');
   assert.equal(firstSnapshot.relationships.length, 2, 'explicit record and Jira relationships are available to the renderer');
   assert.equal(firstSnapshot.relationships.find((relationship) => relationship.id === objectiveRequest.id).history.length, 3, 'created, archived, and restored provenance events remain visible');
   assert.equal(firstSnapshot.quality.evidence.recordRelationshipEvents, 4, 'relationship events remain part of the evidence inventory');
@@ -250,7 +261,7 @@ async function main() {
   db.exec('ALTER TABLE business_issue_cache DROP COLUMN issue_type_name; PRAGMA user_version=7;');
   db.close();
   db = openDatabase(dbPath);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 10);
   assert.ok(db.prepare('PRAGMA table_info(business_issue_cache)').all().some((column) => column.name === 'issue_type_name'));
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM business_issue_cache').get().count, 4);
   db.close();

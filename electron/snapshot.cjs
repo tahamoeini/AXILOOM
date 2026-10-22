@@ -49,18 +49,10 @@ function buildSnapshot(db, filters = {}, options = {}) {
   // historical calculations on the trusted metrics engine, while avoiding shipping
   // every normalized issue row to the renderer on each page load.
   snapshot.issues = [];
-  const eventRows = db.prepare(`SELECT record_id,event_type,occurred_at,payload_json FROM (
-    SELECT events.record_id,events.event_type,events.occurred_at,events.payload_json,events.id,
-      ROW_NUMBER() OVER (PARTITION BY events.record_id ORDER BY events.occurred_at DESC,events.id DESC) AS event_rank
-    FROM record_events AS events JOIN product_records AS records ON records.id=events.record_id
-    WHERE records.archived_at IS NULL
-  ) WHERE event_rank <= 10 ORDER BY occurred_at DESC`).all();
-  const historyByRecord = new Map();
-  eventRows.forEach((row) => {
-    if (!historyByRecord.has(row.record_id)) historyByRecord.set(row.record_id, []);
-    historyByRecord.get(row.record_id).push({ eventType: row.event_type, occurredAt: row.occurred_at, payload: safeJson(row.payload_json, {}) });
-  });
-  snapshot.records = snapshot.records.map((record) => ({ ...record, history: historyByRecord.get(record.id) || [] }));
+  snapshot.summary.recordCount = Number(db.prepare('SELECT COUNT(*) AS count FROM product_records WHERE archived_at IS NULL').get().count || 0);
+  // Product records and their histories are fetched through the paged records API.
+  // Keeping only the count here bounds both the renderer payload and cached reports.
+  snapshot.records = [];
   const linkEvents = db.prepare(`SELECT link_id,event_type,occurred_at,payload_json FROM (
     SELECT events.link_id,events.event_type,events.occurred_at,events.payload_json,events.id,
       ROW_NUMBER() OVER (PARTITION BY events.link_id ORDER BY events.occurred_at DESC,events.id DESC) AS event_rank

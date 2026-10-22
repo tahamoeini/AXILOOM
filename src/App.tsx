@@ -36,7 +36,7 @@ const navigation: Array<{ id: PageId; label: string; group: string; icon: typeof
 
 function emptySnapshot(): Snapshot {
   return {
-    summary: { issueCount: 0, projectCounts: [], epicCount: 0, sprintCount: 0, reportableSprints: 0, relationCount: 0, unmappedTeamRelationCount: 0, warningCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null, openActions: 0, openRequests: 0, decisions: 0, outcomes: 0 },
+    summary: { issueCount: 0, projectCounts: [], epicCount: 0, sprintCount: 0, reportableSprints: 0, relationCount: 0, unmappedTeamRelationCount: 0, warningCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null, openActions: 0, openRequests: 0, decisions: 0, outcomes: 0, recordCount: 0 },
     teams: [], projects: [], sprintMetrics: [], people: [], issues: [], issueTotal: 0, epics: [], records: [], relationships: [], links: [],
     business: { summary: {}, issues: [], statuses: [], components: [], assignees: [], componentAssignees: [], agingBuckets: [], monthly: [], ageMethod: '' }, jiraIssueLinks: [], localIssueLinks: [],
     quality: { findings: [], fieldCoverage: {}, unknownFields: [], incompleteHistories: 0, issuesWithoutHistory: 0, conflicts: 0, evidence: { issueRevisions: 0, issueHistoryEvents: 0, sprintRevisions: 0, localLinkEvents: 0, recordRelationshipEvents: 0 } }, importRuns: [],

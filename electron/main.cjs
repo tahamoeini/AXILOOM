@@ -383,6 +383,7 @@ function registerHandlers() {
   });
   ipcMain.handle('app:snapshot', (_event, filters) => readSnapshotInWorker(filters));
   ipcMain.handle('issues:list', (_event, filters) => runDataAccessWorker('listIssues', [filters || {}]));
+  ipcMain.handle('records:list', (_event, filters) => runDataAccessWorker('listRecords', [filters || {}]));
   ipcMain.handle('issues:filter-options', (_event, project) => runDataAccessWorker('getIssueFilterOptions', [project || '']));
   ipcMain.handle('issues:overview-stats', () => runDataAccessWorker('getIssueOverviewStats'));
   ipcMain.handle('issues:period-report', (_event, filters) => runDataAccessWorker('getCalendarPeriodReport', [filters || {}]));

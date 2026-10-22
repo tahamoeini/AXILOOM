@@ -78,6 +78,13 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
   const [attributedTo, setAttributedTo] = useState('');
   const [editingRelationship, setEditingRelationship] = useState<ProductRelationship | null>(null);
   const [savingRelationship, setSavingRelationship] = useState(false);
+  const [recordLookupQuery, setRecordLookupQuery] = useState('');
+  const [recordLookupRecords, setRecordLookupRecords] = useState<ProductRecord[]>([]);
+  const availableRecordOptions = useMemo(() => {
+    const byId = new Map<string, ProductRecord>();
+    [...recordOptions, ...recordLookupRecords, ...(record ? [record] : [])].forEach((item) => byId.set(item.id, item));
+    return Array.from(byId.values());
+  }, [recordOptions, recordLookupRecords, record]);
   const activeRelationships = useMemo(() => record ? relationships.filter((item) => relatedToRecord(item, record.id)) : [], [relationships, record]);
   const suggestions = useMemo(() => {
     if (!record) return [];
@@ -90,15 +97,25 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
       const values = field.type === 'issueRefList' && Array.isArray(value) ? value.map(String) : [String(value || '')];
       values.forEach((id) => {
         if (!id || currentPair(field.type === 'issueRef' || field.type === 'issueRefList' ? 'issue' : 'record', id)) return;
-        if (field.type === 'recordRef' && recordOptions.some((option) => option.id === id)) {
-          items.push({ type: 'record', id, label: recordOptions.find((option) => option.id === id)?.title || id, field: field.label });
+        if (field.type === 'recordRef' && availableRecordOptions.some((option) => option.id === id)) {
+          items.push({ type: 'record', id, label: availableRecordOptions.find((option) => option.id === id)?.title || id, field: field.label });
         } else if ((field.type === 'issueRef' || field.type === 'issueRefList') && ISSUE_KEY.test(id.toUpperCase())) {
           items.push({ type: 'issue', id: id.toUpperCase(), label: id.toUpperCase(), field: field.label });
         }
       });
     });
     return items.filter((item, index) => items.findIndex((candidate) => candidate.type === item.type && candidate.id === item.id) === index);
-  }, [fields, record, recordOptions, relationships]);
+  }, [fields, record, availableRecordOptions, relationships]);
+
+  useEffect(() => {
+    let active = true;
+    const timer = setTimeout(() => {
+      window.axiloom.listRecords({ query: recordLookupQuery, limit: 50, includeHistory: false })
+        .then((result) => { if (active) setRecordLookupRecords(result.items); })
+        .catch(() => { if (active) setRecordLookupRecords([]); });
+    }, recordLookupQuery ? 200 : 0);
+    return () => { active = false; clearTimeout(timer); };
+  }, [recordLookupQuery]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !saving && !savingRelationship) close(); };
@@ -134,7 +151,7 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
         payload[field.key] = Array.from(new Set(tokens));
       } else if (field.type === 'enum' && value && !field.options.includes(value)) {
         setError(`Choose a configured value for «${field.label}».`); return;
-      } else if (field.type === 'recordRef' && value && !recordOptions.some((item) => item.id === value && (field.referenceKinds || []).includes(item.kind))) {
+      } else if (field.type === 'recordRef' && value && !availableRecordOptions.some((item) => item.id === value && (field.referenceKinds || []).includes(item.kind))) {
         setError(`Choose an active record of the configured type for «${field.label}».`); return;
       } else payload[field.key] = storedValue(field, value);
     }
@@ -201,8 +218,9 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
       {!template && <div className="form-error">This record type has no active typed template in the workspace configuration.</div>}
       <form onSubmit={submit}>
         <label className="form-field full"><span>Title <i>Required</i></span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Write a short, traceable title" /></label>
+        <label className="form-field full"><span>Search active records for references and relationships</span><input value={recordLookupQuery} onChange={(event) => setRecordLookupQuery(event.target.value)} placeholder="Type a record title or ID" /></label>
         <div className="form-grid">{fields.map((field) => {
-          const referenceOptions = recordOptions.filter((item) => item.id !== record?.id && (field.referenceKinds || []).includes(item.kind));
+          const referenceOptions = availableRecordOptions.filter((item) => item.id !== record?.id && (field.referenceKinds || []).includes(item.kind));
           return <label className={`form-field ${field.type === 'textarea' || field.type === 'issueRefList' ? 'full' : ''}`} key={field.key}><span>{field.label}{field.required && <i>Required</i>}</span>
             {field.type === 'recordRef' ? <select value={values[field.key] || ''} onChange={(event) => update(field.key, event.target.value)}><option value="">No record selected</option>{values[field.key] && !referenceOptions.some((option) => option.id === values[field.key]) && <option value={values[field.key]}>Stored legacy reference · {values[field.key]}</option>}{referenceOptions.map((option) => <option key={option.id} value={option.id}>{option.title}</option>)}</select>
               : field.type === 'enum' ? <select value={values[field.key] || ''} onChange={(event) => update(field.key, event.target.value)}><option value="">Choose a configured value</option>{values[field.key] && !field.options.includes(values[field.key]) && <option value={values[field.key]}>Stored legacy value · {values[field.key]}</option>}{field.options.map((option) => <option key={option}>{option}</option>)}</select>
@@ -228,7 +246,7 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
           <h4>{editingRelationship ? 'Edit relationship provenance' : 'Add an explicit relationship'}</h4>
           {editingRelationship ? <div className="relationship-target-readonly">{editingRelationship.sourceLabel} → {editingRelationship.targetLabel}</div> : <>
             <label className="form-field"><span>Target type</span><select value={targetType} onChange={(event) => { setTargetType(event.target.value as 'record' | 'issue'); setTargetId(''); }}><option value="record">Local record</option><option value="issue">Existing Jira issue</option></select></label>
-            {targetType === 'record' ? <label className="form-field"><span>Target record</span><select value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">Choose a record</option>{recordOptions.filter((item) => item.id !== record.id).map((item) => <option key={item.id} value={item.id}>{item.title} · {item.kind}</option>)}</select></label>
+            {targetType === 'record' ? <label className="form-field"><span>Target record</span><select value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">Choose a record</option>{availableRecordOptions.filter((item) => item.id !== record.id).map((item) => <option key={item.id} value={item.id}>{item.title} · {item.kind}</option>)}</select></label>
               : <label className="form-field"><span>Jira issue key</span><input value={targetId} onChange={(event) => setTargetId(event.target.value.toUpperCase())} placeholder="PROJECT-123" dir="ltr" />{!jiraUrl && <small>Issue existence is checked against the imported workspace evidence.</small>}</label>}
           </>}
           <div className="form-grid"><label className="form-field"><span>Relationship type</span><select value={linkKind} onChange={(event) => setLinkKind(event.target.value as ProductRelationshipKind)}>{RELATIONSHIP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>

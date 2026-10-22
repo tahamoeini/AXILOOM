@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { AlertCircle, Database, ExternalLink, GitBranch, History, Link2, Plus, Trash2, X } from 'lucide-react';
 import JiraManagement from './JiraManagement';
-import type { IssueDetails, Snapshot } from '../types';
+import type { IssueDetails, ProductRecord, Snapshot } from '../types';
 import { DataTable, IssueKey, StatusBadge, formatDate, formatNumber, formatTime } from './Primitives';
 
 function formatValue(value: unknown) {
@@ -47,6 +47,7 @@ export default function IssueDetailModal({ issueKey, jiraUrl, config, snapshot, 
   const [relatedKey, setRelatedKey] = useState('');
   const [linkNote, setLinkNote] = useState('');
   const [savingLink, setSavingLink] = useState(false);
+  const [relatedRecords, setRelatedRecords] = useState<ProductRecord[]>([]);
 
   const loadDetails = useCallback(async (includeActivity = false) => {
     setLoading(true);
@@ -137,7 +138,13 @@ export default function IssueDetailModal({ issueKey, jiraUrl, config, snapshot, 
     summary: '',
   }));
   const jiraLinks = Array.from(new Map([...directJiraLinks, ...linkedByOtherSide].map((link) => [`${link.key}|${link.relationship}`, link])).values());
-  const relatedRecords = useMemo(() => snapshot.records.filter((record) => recordKeys(record).includes(issueKey)), [snapshot.records, issueKey]);
+  useEffect(() => {
+    let active = true;
+    window.axiloom.listRecords({ relatedIssueKey: issueKey, limit: 250, includeHistory: false })
+      .then((result) => { if (active) setRelatedRecords(result.items); })
+      .catch(() => { if (active) setRelatedRecords([]); });
+    return () => { active = false; };
+  }, [issueKey, snapshot]);
   const productLinkedKeys = Array.from(new Set(relatedRecords.flatMap((record) => recordKeys(record)).filter((key) => key !== issueKey)));
 
   async function addLink(event: FormEvent) {

@@ -75,7 +75,7 @@
           summary: {
             issueCount: 0, projectCounts: [], epicCount: 0, sprintCount: 0, reportableSprints: 0,
             relationCount: 0, unmappedTeamRelationCount: 0, warningCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null,
-            openActions: 0, openRequests: 0, decisions: 0, outcomes: 0,
+            openActions: 0, openRequests: 0, decisions: 0, outcomes: 0, recordCount: 0,
           },
           teams: ['Synthetic Team'], projects: [], sprintMetrics: [], people: [], issues: [], issueTotal: 0,
           epics: [], records: [], relationships: [], links: [],
@@ -104,6 +104,7 @@
           createdAt: '2026-02-02T00:00:00.000Z', updatedAt: '2026-02-02T00:00:00.000Z', history: [],
         };
         snapshot.records = [syntheticObjective, syntheticOutcome];
+        snapshot.summary.recordCount = snapshot.records.length;
         snapshot.summary.issueCount = 1;
         snapshot.summary.projectCounts = [{ project: 'ALPHA', count: 1 }];
         snapshot.summary.lastIssueUpdate = syntheticIssue.updated;
@@ -145,6 +146,24 @@
         window.confirm = (message) => { smoke.confirmations.push(String(message)); return true; };
         window.axiloom = {
           getSnapshot: async () => snapshot,
+          listRecords: async (filters = {}) => {
+            const kinds = new Set(filters.kinds || (filters.kind ? [filters.kind] : []));
+            const query = String(filters.query || '').toLocaleLowerCase('en-US');
+            const matching = snapshot.records.filter((record) => (!kinds.size || kinds.has(record.kind))
+              && (!filters.status || String(record.payload.status || '') === filters.status)
+              && (!query || `${record.id} ${record.title} ${JSON.stringify(record.payload)}`.toLocaleLowerCase('en-US').includes(query))
+              && (!filters.relatedIssueKey || JSON.stringify(record.payload).toUpperCase().includes(String(filters.relatedIssueKey).toUpperCase())));
+            const offset = Math.max(0, Number(filters.offset) || 0), limit = Math.max(1, Math.min(250, Number(filters.limit) || 50));
+            const items = matching.slice(offset, offset + limit).map((record) => filters.includeHistory === false ? { ...record, history: [] } : record);
+            const allForKinds = snapshot.records.filter((record) => !kinds.size || kinds.has(record.kind));
+            const legacyObjectiveCounts = Object.fromEntries(snapshot.records.filter((record) => record.payload.objectiveId).reduce((counts, record) => counts.set(record.payload.objectiveId, (counts.get(record.payload.objectiveId) || 0) + 1), new Map()));
+            const meetingCounts = {};
+            snapshot.records.filter((record) => record.payload.meetingId).forEach((record) => { meetingCounts[record.payload.meetingId] ||= {}; meetingCounts[record.payload.meetingId][record.kind] = (meetingCounts[record.payload.meetingId][record.kind] || 0) + 1; });
+            return { items, total: matching.length, offset, limit, hasMore: offset + items.length < matching.length,
+              statusOptions: [...new Set(allForKinds.map((record) => String(record.payload.status || '')).filter(Boolean))].sort(),
+              dueCount: snapshot.records.filter((record) => record.kind === 'action' && record.payload.dueAt && !['Done', 'Closed', 'Resolved', 'Rejected'].includes(String(record.payload.status))).length,
+              legacyObjectiveCounts, meetingCounts };
+          },
           getConfig: async () => config,
           getWorkspaceInfo: async () => ({
             id: 'default', name: config.workspaceName, path: 'synthetic-fixture', warning: '',
@@ -255,9 +274,10 @@
             const previous = snapshot.records.find((current) => current.id === id);
             const record = { id: id || `smoke-${snapshot.records.length + 1}`, kind, title, payload, createdAt: previous?.createdAt || timestamp, updatedAt: timestamp, history: [...(previous?.history || []), { eventType: previous ? 'updated' : 'created', occurredAt: timestamp, payload }] };
             snapshot.records = snapshot.records.filter((current) => current.id !== record.id).concat(record);
+            snapshot.summary.recordCount = snapshot.records.length;
             return record;
           },
-          archiveRecord: async (id) => { snapshot.records = snapshot.records.filter((record) => record.id !== id); },
+          archiveRecord: async (id) => { snapshot.records = snapshot.records.filter((record) => record.id !== id); snapshot.summary.recordCount = snapshot.records.length; },
           saveRecordRelationship: async (input) => {
             smoke.relationshipInputs.push(input);
             const timestamp = new Date().toISOString();

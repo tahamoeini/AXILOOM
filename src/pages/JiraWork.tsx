@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, FileDown, Search } from 'lucide-react';
-import type { AppConfig, ExportReport, ProductRecord, Snapshot, IssueListFilters, IssueListResult } from '../types';
+import type { AppConfig, ExportReport, ProductRecord, ProductRecordListResult, Snapshot, IssueListFilters, IssueListResult } from '../types';
 import { createReportScope } from '../reporting';
 import JiraIssueEditor from '../components/JiraIssueEditor';
 import { DataTable, IssueKey, MetricCard, SectionHeading, StatusBadge, formatDate, formatNumber } from '../components/Primitives';
@@ -30,14 +30,24 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
   const [list, setList] = useState<IssueListResult>(emptyList);
   const [stats, setStats] = useState<IssueListResult>(emptyList);
   const [statuses, setStatuses] = useState<string[]>([]);
+  const [localRecordOffset, setLocalRecordOffset] = useState(0);
+  const [localRecordList, setLocalRecordList] = useState<ProductRecordListResult>({ items: [], total: 0, offset: 0, limit: 50, hasMore: false, statusOptions: [], dueCount: 0, legacyObjectiveCounts: {}, meetingCounts: {} });
   useEffect(() => { if (!projects.includes(project)) setProject(projects[0] || ''); }, [projects.join('|'), project]);
   const isIntake = intake;
   const workflowScope = isIntake ? 'intake' : 'commitment';
   const kind = isIntake ? 'request' : 'action';
   const label = isIntake ? 'Product intake' : 'Commitments';
-  const localRecords = snapshot.records.filter((record) => record.kind === kind);
+  const localRecords = localRecordList.items;
   const triggered = pending?.kind === kind && pending.nonce !== handledNonce;
   const issueFilters = useMemo<IssueListFilters>(() => ({ project, status, query, workflowScope, sortBy: 'updated', sortDirection: 'desc' }), [project, status, query, workflowScope]);
+
+  useEffect(() => {
+    let active = true;
+    window.axiloom.listRecords({ kind, offset: localRecordOffset, limit: 50, includeHistory: false })
+      .then((result) => { if (active) setLocalRecordList(result); })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : 'Local product records could not be loaded.'); });
+    return () => { active = false; };
+  }, [kind, localRecordOffset, snapshot]);
 
   useEffect(() => {
     let active = true;
@@ -111,9 +121,10 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
           <button className="button tiny secondary" onClick={() => openIssue(issue.key)}>Open details</button>])}
         empty={project ? 'No issues have been imported for this project.' : 'No project is assigned to this role.'} serverPagination={{ offset, limit: 50, total: list.total, loading, onPageChange: setOffset }} />
     </section>
-    {localRecords.length > 0 && <section className="panel table-panel"><SectionHeading title="Local product records" hint="These records are preserved separately from Jira issues." />
+    {localRecordList.total > 0 && <section className="panel table-panel"><SectionHeading title="Local product records" hint="These records are preserved separately from Jira issues." />
       <DataTable headers={['Title', 'Owner', 'Status', 'Related issues']} rows={localRecords.map((record) => [record.title, String(record.payload.ownerName || record.payload.ownerKey || '—'),
-        String(record.payload.status || '—'), recordKeys(record).map((key) => <IssueKey key={key} value={key} onOpen={openIssue} />)])} />
+        String(record.payload.status || '—'), recordKeys(record).map((key) => <IssueKey key={key} value={key} onOpen={openIssue} />)])}
+        serverPagination={{ offset: localRecordOffset, limit: localRecordList.limit, total: localRecordList.total, loading: false, onPageChange: setLocalRecordOffset }} />
     </section>}
     {(creating || triggered) && project && <JiraIssueEditor project={project} config={config} close={() => { setCreating(false); if (pending) setHandledNonce(pending.nonce); clearPending(); }}
       saved={async (key, warning) => { notify(warning || key + ' created in Jira.'); await refresh(); openIssue(key); }} />}

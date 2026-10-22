@@ -28,6 +28,18 @@ export interface ProductRecord {
   history?: Array<{ eventType: string; occurredAt: string; payload: Record<string, unknown> }>;
 }
 
+export interface ProductRecordListResult {
+  items: ProductRecord[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  statusOptions: string[];
+  dueCount: number;
+  legacyObjectiveCounts: Record<string, number>;
+  meetingCounts: Record<string, Record<string, number>>;
+}
+
 export interface Snapshot {
   summary: {
     issueCount: number;
@@ -44,6 +56,7 @@ export interface Snapshot {
     openRequests: number;
     decisions: number;
     outcomes: number;
+    recordCount: number;
   };
   teams: string[];
   projects: string[];
@@ -270,6 +283,7 @@ export interface AxiloomApi {
 
   getSnapshot: (filters?: Record<string, unknown>) => Promise<Snapshot>;
   listIssues: (filters?: IssueListFilters) => Promise<IssueListResult>;
+  listRecords: (filters?: { kind?: string; kinds?: string[]; query?: string; status?: string; ids?: string[]; relatedIssueKey?: string; offset?: number; limit?: number; includeHistory?: boolean }) => Promise<ProductRecordListResult>;
   getIssueFilterOptions: (project?: string) => Promise<IssueFilterOptions>;
   getIssueOverviewStats: () => Promise<{ issueCount:number; openCount:number; epicLinkedCount:number; issuesWithoutAssignee:number; lastIssueUpdate:string|null; projectCounts:Array<{project:string;count:number}> }>;
   getCalendarPeriodReport: (filters: { projects?:string[]; from?:string; to?:string; previousFrom?:string; previousTo?:string }) => Promise<{ created:number; completed:number; completedWithoutResolution:number; previousCreated:number|null; previousCompleted:number|null; monthly:Array<{month:string;created:number;completed:number}> }>;

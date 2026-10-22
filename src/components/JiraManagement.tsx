@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AppConfig, IssueDetails, Snapshot } from '../types';
+import type { AppConfig, IssueDetails, ProductRecord, Snapshot } from '../types';
 import JiraIssueEditor from './JiraIssueEditor';
 import { DataTable, IssueKey, MultiSelect, formatDate, formatNumber } from './Primitives';
 
@@ -16,8 +16,25 @@ export default function JiraManagement({ details, snapshot, config, live, reload
   const [commentDraft, setCommentDraft] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [recordIds, setRecordIds] = useState<string[]>([]);
+  const [recordOptions, setRecordOptions] = useState<ProductRecord[]>([]);
+  const [recordOptionQuery, setRecordOptionQuery] = useState('');
+  const [related, setRelated] = useState<ProductRecord[]>([]);
   const fields = details.raw.fields || {};
   const comments = fields.comment?.comments || [];
+  useEffect(() => {
+    let active = true;
+    window.axiloom.listRecords({ kinds: ['objective', 'decision', 'meeting', 'outcome', 'action', 'request'], query: recordOptionQuery, limit: 100, includeHistory: false })
+      .then((result) => { if (active) setRecordOptions(result.items); })
+      .catch(() => { if (active) setRecordOptions([]); });
+    return () => { active = false; };
+  }, [recordOptionQuery, snapshot]);
+  useEffect(() => {
+    let active = true;
+    window.axiloom.listRecords({ relatedIssueKey: details.key, limit: 250, includeHistory: false })
+      .then((result) => { if (active) setRelated(result.items); })
+      .catch(() => { if (active) setRelated([]); });
+    return () => { active = false; };
+  }, [details.key, snapshot]);
   useEffect(() => {
     let active = true;
     setCaps(null);
@@ -39,7 +56,6 @@ export default function JiraManagement({ details, snapshot, config, live, reload
     catch (e) { setError(e instanceof Error ? e.message : 'عملیات انجام نشد.'); }
     finally { setBusy(false); }
   }
-  const related = snapshot.records.filter((record) => [record.payload.primaryIssueKey, ...(record.payload.relatedIssueKeys as string[] || []), record.payload.businessEpicKey, ...(record.payload.linkedIssueKeys as string[] || []), ...(record.payload.businessIssueKeys as string[] || [])].includes(details.key));
   return <section className="issue-detail-section"><h3>مدیریت تسک واقعی Jira</h3>
     <div className="jira-management-actions"><button className="button secondary" disabled={busy} onClick={() => perform(reload, 'نسخهٔ تازهٔ Jira دریافت شد.', false)}>بازخوانی از Jira</button>
       <button className="button primary" disabled={busy || !live || !caps?.permissions.EDIT_ISSUES} onClick={() => setEditor({})}>ویرایش فیلدها</button>
@@ -68,7 +84,8 @@ export default function JiraManagement({ details, snapshot, config, live, reload
       <label>نوع ارتباط<select value={typeId} onChange={(e) => setTypeId(e.target.value)}><option value="">انتخاب کنید</option>{types.map((type) => <option key={type.id} value={type.id}>{type.outward || type.name}</option>)}</select></label>
       <button className="button primary" disabled={busy || !typeId || !target} onClick={() => { if (window.confirm(`ارتباط ${details.key} ← ${types.find((type) => type.id === typeId)?.outward} ← ${target} در Jira ثبت شود؟`)) void perform(() => window.axiloom.linkJiraIssue({ key: details.key, target, typeId }), 'ارتباط در Jira ثبت شد.'); }}>ثبت ارتباط</button></div>
     <><h3>پیوند ثبت‌های محصول</h3><p>ثبت‌های انتخاب‌شده به این issue متصل می‌شوند؛ Axiloom این ارتباط را در فضای محلی ثبت می‌کند و جزئیات آن را در قالب کامنت به Jira می‌فرستد.</p>
-      <MultiSelect label="ثبت‌های مرتبط" value={recordIds} showSelectionChips options={snapshot.records.filter((record) => ['objective', 'decision', 'meeting', 'outcome', 'action', 'request'].includes(record.kind)).map((record) => ({ value: record.id, label: `${({ objective: 'هدف', decision: 'تصمیم', meeting: 'جلسه', outcome: 'خروجی', request: 'درخواست', action: 'تعهد' } as Record<string, string>)[record.kind]} · ${record.title}` }))} onChange={setRecordIds} />
+      <label className="form-field">جست‌وجوی ثبت محصولی<input value={recordOptionQuery} onChange={(event) => setRecordOptionQuery(event.target.value)} placeholder="عنوان یا جزئیات ثبت را بنویسید" /></label>
+      <MultiSelect label="ثبت‌های مرتبط" value={recordIds} showSelectionChips options={recordOptions.map((record) => ({ value: record.id, label: `${({ objective: 'هدف', decision: 'تصمیم', meeting: 'جلسه', outcome: 'خروجی', request: 'درخواست', action: 'تعهد' } as Record<string, string>)[record.kind]} · ${record.title}` }))} onChange={setRecordIds} />
       <button className="button primary" disabled={busy || !recordIds.length} onClick={() => { if (window.confirm('ارتباط این ثبت‌ها با issue و کامنت متناظر در Jira ثبت شود؟')) void perform(() => window.axiloom.linkJiraRecords({ key: details.key, recordIds }), 'پیوندهای ثبت محصول ذخیره شدند.'); }}>ثبت ارتباطات انتخاب‌شده</button></>
     {related.length > 0 && <DataTable headers={['نوع', 'عنوان', 'شناسه', 'تعهد مرتبط']} rows={related.map((record) => [record.kind, record.title, record.id, <IssueKey value={details.key} onOpen={openIssue} />])} />}
     {deleteTarget && <div className="modal-backdrop jira-editor-backdrop"><section className="record-modal" role="dialog" aria-modal="true" aria-label="تأیید حذف دائمی"><h2>{deleteTarget.comment ? `حذف کامنت ${deleteTarget.comment.id}` : `حذف تسک ${details.key}`}</h2><p>این عملیات اطلاعات را از Jira حذف می‌کند و قابل بازگشت از این برنامه نیست.</p>{deleteTarget.comment && <pre className="jira-description">{typeof deleteTarget.comment.body === 'string' ? deleteTarget.comment.body : JSON.stringify(deleteTarget.comment.body)}</pre>}<label className="form-field">برای تأیید، عبارت <b dir="ltr">{deleteTarget.comment ? `${details.key}/${deleteTarget.comment.id}` : details.key}</b> را وارد کنید.<input autoFocus dir="ltr" value={deleteConfirmation} disabled={busy} onChange={(e) => setDeleteConfirmation(e.target.value)} /></label>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button className="button secondary" disabled={busy} onClick={() => setDeleteTarget(null)}>انصراف</button><button className="button primary" disabled={busy || deleteConfirmation !== (deleteTarget.comment ? `${details.key}/${deleteTarget.comment.id}` : details.key)} onClick={() => {

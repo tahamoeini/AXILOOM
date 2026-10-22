@@ -225,6 +225,7 @@ function openDatabase(filePath) {
   migrateIssueEvidence(db);
   migrateLocalIssueLinkEventKeys(db);
   migrateReportAndIssueIndexes(db);
+  migrateProductRecordPaging(db);
   ensureColumn(db, 'configuration_revisions', 'source_profile_json', 'TEXT');
   initializeConfiguration(db);
   rebuildSemanticProjection(db, getConfig(db));
@@ -335,6 +336,25 @@ function migrateReportAndIssueIndexes(db) {
     WHEN OLD.key='config' BEGIN UPDATE workspace_generation SET metrics_generation=metrics_generation+1 WHERE id=1; END;`);
   const version = Number(db.prepare('PRAGMA user_version').get().user_version || 0);
   if (version < 9) db.exec('PRAGMA user_version=9');
+}
+
+function migrateProductRecordPaging(db) {
+  const version = Number(db.prepare('PRAGMA user_version').get().user_version || 0);
+  if (version >= 10) return;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_product_records_active_page
+        ON product_records(kind,updated_at DESC,id) WHERE archived_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_record_events_latest
+        ON record_events(record_id,occurred_at DESC,id DESC);
+      PRAGMA user_version=10;
+    `);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function getDataGeneration(db) {
@@ -1546,6 +1566,77 @@ function readRows(db, table, order = '') {
   return db.prepare(`SELECT * FROM ${table} ${order}`).all();
 }
 
+function listRecords(db, filters = {}) {
+  const limit = Math.max(1, Math.min(250, Math.trunc(Number(filters.limit) || 50)));
+  const offset = Math.max(0, Math.trunc(Number(filters.offset) || 0));
+  const where = ['archived_at IS NULL'];
+  const params = [];
+  const kinds = [...new Set((Array.isArray(filters.kinds) ? filters.kinds : filters.kind ? [filters.kind] : [])
+    .map((kind) => String(kind || '').trim()).filter((kind) => kind && kind.length <= 80))].slice(0, 20);
+  if (kinds.length) { where.push(`kind IN (${kinds.map(() => '?').join(',')})`); params.push(...kinds); }
+  const ids = [...new Set((Array.isArray(filters.ids) ? filters.ids : []).map((id) => String(id || '').trim()).filter((id) => id && id.length <= 160))].slice(0, 250);
+  if (ids.length) { where.push(`id IN (${ids.map(() => '?').join(',')})`); params.push(...ids); }
+  const query = String(filters.query || '').trim().slice(0, 200);
+  if (query) { where.push("instr(lower(id || ' ' || title || ' ' || payload_json),lower(?))>0"); params.push(query); }
+  const status = String(filters.status || '').trim().slice(0, 160);
+  if (status) { where.push("COALESCE(json_extract(payload_json,'$.status'),'')=?"); params.push(status); }
+  const relatedIssueKey = String(filters.relatedIssueKey || '').trim().toUpperCase();
+  if (relatedIssueKey && /^[A-Z][A-Z0-9_]*-\d+$/.test(relatedIssueKey)) {
+    const scalarFields = ['primaryIssueKey','issueKey','requestKey','productKey','businessEpicKey','businessIssueKey'];
+    const arrayFields = ['issueKeys','businessIssueKeys','technicalIssueKeys','linkedIssueKeys','relatedIssueKeys'];
+    where.push(`(${[
+      ...scalarFields.map((key) => `upper(COALESCE(json_extract(payload_json,'$.${key}'),''))=?`),
+      ...arrayFields.map((key) => `EXISTS (SELECT 1 FROM json_each(product_records.payload_json,'$.${key}') AS refs WHERE upper(CAST(refs.value AS TEXT))=?)`),
+    ].join(' OR ')})`);
+    params.push(...Array(scalarFields.length + arrayFields.length).fill(relatedIssueKey));
+  }
+  const clause = where.join(' AND ');
+  const total = Number(db.prepare(`SELECT COUNT(*) AS count FROM product_records WHERE ${clause}`).get(...params)?.count || 0);
+  const rows = db.prepare(`SELECT id,kind,title,payload_json,created_at,updated_at FROM product_records
+    WHERE ${clause} ORDER BY updated_at DESC,id LIMIT ? OFFSET ?`).all(...params, limit, offset);
+  const items = rows.map((row) => ({
+    id: row.id, kind: row.kind, title: row.title, payload: safeJson(row.payload_json, {}),
+    createdAt: row.created_at, updatedAt: row.updated_at, history: [],
+  }));
+  if (items.length && filters.includeHistory !== false) {
+    const eventRows = db.prepare(`SELECT record_id,event_type,occurred_at,payload_json FROM (
+      SELECT record_id,event_type,occurred_at,payload_json,id,
+        ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY occurred_at DESC,id DESC) AS event_rank
+      FROM record_events WHERE record_id IN (${items.map(() => '?').join(',')})
+    ) WHERE event_rank <= 10 ORDER BY occurred_at DESC,id DESC`).all(...items.map((item) => item.id));
+    const historyById = new Map();
+    eventRows.forEach((event) => {
+      if (!historyById.has(event.record_id)) historyById.set(event.record_id, []);
+      historyById.get(event.record_id).push({ eventType: event.event_type, occurredAt: event.occurred_at, payload: safeJson(event.payload_json, {}) });
+    });
+    items.forEach((item) => { item.history = historyById.get(item.id) || []; });
+  }
+  const kindWhere = kinds.length ? `WHERE archived_at IS NULL AND kind IN (${kinds.map(() => '?').join(',')})` : 'WHERE archived_at IS NULL';
+  const kindParams = kinds;
+  const statusOptions = db.prepare(`SELECT DISTINCT COALESCE(json_extract(payload_json,'$.status'),'') AS status
+    FROM product_records ${kindWhere} ORDER BY status`).all(...kindParams).map((row) => row.status).filter(Boolean);
+  const dueCount = kinds.includes('action')
+    ? Number(db.prepare(`SELECT COUNT(*) AS count FROM product_records WHERE archived_at IS NULL AND kind='action'
+      AND COALESCE(json_extract(payload_json,'$.dueAt'),'')<>''
+      AND COALESCE(json_extract(payload_json,'$.status'),'') NOT IN ('Done','Closed','Resolved','Rejected')`).get().count || 0)
+    : 0;
+  const legacyObjectiveCounts = {};
+  if (kinds.includes('objective')) {
+    db.prepare(`SELECT json_extract(payload_json,'$.objectiveId') AS parent_id,COUNT(*) AS count
+      FROM product_records WHERE archived_at IS NULL AND kind IN ('request','action','decision','meeting','outcome')
+      AND COALESCE(json_extract(payload_json,'$.objectiveId'),'')<>'' GROUP BY parent_id`).all()
+      .forEach((row) => { legacyObjectiveCounts[row.parent_id] = Number(row.count); });
+  }
+  const meetingCounts = {};
+  if (kinds.includes('meeting')) {
+    db.prepare(`SELECT json_extract(payload_json,'$.meetingId') AS parent_id,kind,COUNT(*) AS count
+      FROM product_records WHERE archived_at IS NULL AND kind IN ('decision','action')
+      AND COALESCE(json_extract(payload_json,'$.meetingId'),'')<>'' GROUP BY parent_id,kind`).all()
+      .forEach((row) => { meetingCounts[row.parent_id] ||= {}; meetingCounts[row.parent_id][row.kind] = Number(row.count); });
+  }
+  return { items, total, offset, limit, hasMore: offset + items.length < total, statusOptions, dueCount, legacyObjectiveCounts, meetingCounts };
+}
+
 module.exports = {
   openDatabase, getConfig, saveConfig, saveIssue, saveSprint, readRows, routeForBoard,
   saveLocalIssueLink, removeLocalIssueLink, getIssueDetails, getSprintDetails,
@@ -1553,5 +1644,5 @@ module.exports = {
   listLocalIssueLinks, mergeIssueHistoryPage, getIssueActivity, getDataGeneration, getMetricsGeneration, getCachedReport, saveCachedReport,
   getCachedMetrics, saveCachedMetrics,
   saveBusinessIssueCache, getBusinessBoardReport,
-  listIssues, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport,
+  listIssues, listRecords, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport,
 };
