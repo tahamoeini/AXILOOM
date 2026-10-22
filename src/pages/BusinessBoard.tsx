@@ -121,9 +121,10 @@ export default function BusinessBoard({ snapshot, config, openIssue, createRecor
       title: 'Sprint commitment report · ' + sprintReport.sprint.name,
       subtitle: 'Commitment and milestone meaning comes from the active workflow policy. Missing history and points remain visible.',
       sheets: [
-        { name: 'Teams', rows: [['Team', 'Committed issues', 'Committed SP', 'Missing SP', 'Added', 'Added SP', 'In scope at end', 'Completed', 'Completed SP', 'Exited', 'Point increase', 'Point decrease'], ...sprintReport.teams.map((team) => [team.team, team.committedCount, team.committedSP, team.committedMissingSPCount, team.addedCount, team.addedSP, team.inScopeAtEndCount, team.completedCount, team.completedSP, team.exitCount, team.pointIncreaseSP, team.pointDecreaseSP])] },
+        { name: 'Teams', rows: [['Team ID', 'Team', 'Committed issues', 'Committed SP', 'Missing SP', 'Added', 'Added SP', 'In scope at end', 'Completed', 'Completed SP', 'Exited', 'Point increase', 'Point decrease'], ...sprintReport.teams.map((team) => [team.teamId, team.team, team.committedCount, team.committedSP, team.committedMissingSPCount, team.addedCount, team.addedSP, team.inScopeAtEndCount, team.completedCount, team.completedSP, team.exitCount, team.pointIncreaseSP, team.pointDecreaseSP])] },
         { name: 'Milestones', rows: [['Team', 'Milestone', 'Reached', 'Story points', 'Missing story points'], ...sprintReport.teams.flatMap((team) => Object.entries(team.milestones).map(([id, value]) => [team.team, milestones.find((item) => item.id === id)?.label || value.label, value.count, value.storyPoints, value.missingStoryPoints]))] },
-        { name: 'Issues', rows: [['Issue', 'Team', 'Attribution', 'Committed', 'Added', 'Start status', 'End status', 'Start SP', 'End SP', 'Completed', 'History complete', 'Delivery issues'], ...sprintReport.items.map((item) => [item.key, item.team, item.teamSource, item.committed, item.addedDuring, item.startStatus, item.endStatus, item.startPoints ?? '', item.endPoints ?? '', item.completedInSprint, item.historyComplete, item.linkedIssueKeys.join(', ')])] },
+        { name: 'Issues', rows: [['Issue', 'Team ID', 'Team', 'Attribution', 'Committed', 'Added', 'Start status', 'End status', 'Start SP', 'End SP', 'Completed', 'History complete', 'Delivery issues'], ...sprintReport.items.map((item) => [item.key, item.teamId, item.team, item.teamSource, item.committed, item.addedDuring, item.startStatus, item.endStatus, item.startPoints ?? '', item.endPoints ?? '', item.completedInSprint, item.historyComplete, item.linkedIssueKeys.join(', ')])] },
+        { name: 'Attribution quality', rows: [['Severity', 'Code', 'Issue', 'Finding'], ...sprintReport.attributionFindings.map((finding) => [finding.severity, finding.code, finding.issueKey, finding.message])] },
       ],
     };
     await window.axiloom.exportXlsx(reportData);
@@ -175,7 +176,7 @@ export default function BusinessBoard({ snapshot, config, openIssue, createRecor
       <SectionHeading title="Sprint commitments" hint="Entry states and milestones follow the configured commitment workflow." action={<button className="button tiny secondary" disabled={!sprintReport} onClick={() => void exportSprint()}><FileDown size={15} /> Export</button>} />
       {sprintError && <p className="form-error" role="alert">{sprintError}</p>}
       <div className="table-tools"><label>Sprint<select value={sprintId} onChange={(event) => setSprintId(event.target.value)}>
-        {!sprints.length && <option value="">No routed sprint available</option>}{sprints.map((item) => <option key={item.id} value={item.id}>{item.teamRoute} · {item.name} · #{item.id}</option>)}
+        {!sprints.length && <option value="">No sprint with a valid boundary</option>}{sprints.map((item) => <option key={item.id} value={item.id}>{item.teamRoute || 'Team determined from issue mapping'} · {item.name} · #{item.id}</option>)}
       </select></label>{sprintReport && <span>{formatDate(sprintReport.sprint.startAt)} – {formatDate(sprintReport.sprint.endAt)}</span>}</div>
       {sprintLoading ? <div className="chart-empty">Rebuilding the sprint view from stored issue history…</div> : sprintReport && <>
         <div className="metric-grid four">
@@ -192,9 +193,12 @@ export default function BusinessBoard({ snapshot, config, openIssue, createRecor
             formatNumber(team.addedCount, 0) + ' · ' + formatNumber(team.addedSP) + ' SP', formatNumber(team.inScopeAtEndCount, 0),
             formatNumber(team.completedCount, 0) + ' · ' + formatNumber(team.completedSP) + ' SP', formatNumber(team.exitCount, 0),
             '+' + formatNumber(team.pointIncreaseSP) + ' / −' + formatNumber(team.pointDecreaseSP)])} empty="No configured commitment issues were found in this sprint." />
-        {sprintReport.coverage.historyIncompleteCount > 0 || sprintReport.unmapped.count > 0 ? <div className="callout warning"><AlertTriangle size={15} /><span>{formatNumber(sprintReport.coverage.historyIncompleteCount, 0)} issue histories are incomplete; {formatNumber(sprintReport.unmapped.count, 0)} issues have no mapped team. Review the evidence before interpreting totals.</span></div> : null}
-        <DataTable headers={['Issue', 'Team', 'Attribution', 'Committed', 'Added', 'Start status / SP', 'End status / SP', 'Completed', 'Milestones']}
-          rows={sprintReport.items.map((item) => [<IssueKey value={item.key} onOpen={openIssue} />, item.team, item.teamSource,
+        {sprintReport.coverage.historyIncompleteCount > 0 || sprintReport.unmapped.count > 0 || sprintReport.attributionFindings.length > 0 ? <div className="callout warning"><AlertTriangle size={15} /><span>{formatNumber(sprintReport.coverage.historyIncompleteCount, 0)} issue histories are incomplete; {formatNumber(sprintReport.unmapped.count, 0)} committed or added issues have no mapped team; {formatNumber(sprintReport.attributionFindings.length, 0)} attribution findings require review.</span></div> : null}
+        {sprintReport.unmapped.count > 0 && <DataTable headers={['Excluded issue', 'Project', 'Source team value', 'Why excluded from team totals']}
+          rows={sprintReport.unmapped.items.map((item) => [<IssueKey value={item.key} onOpen={openIssue} />, item.project, item.teamValue || '—', (item.teamAttributionFindings || []).map((finding: any) => finding.message).join(' ') || 'No active team source applies.'])}
+          empty="No unmapped commitment issues." />}
+        <DataTable headers={['Issue', 'Team ID', 'Team', 'Attribution', 'Committed', 'Added', 'Start status / SP', 'End status / SP', 'Completed', 'Milestones']}
+          rows={sprintReport.items.map((item) => [<IssueKey value={item.key} onOpen={openIssue} />, item.teamId, item.team, item.teamSource,
             item.committed ? 'Yes' : 'No', item.addedDuring ? 'Yes' : 'No', (item.startStatus || '—') + ' · ' + formatNumber(item.startPoints) + ' SP',
             (item.endStatus || '—') + ' · ' + formatNumber(item.endPoints) + ' SP', item.completedInSprint ? 'Yes' : 'No',
             milestones.filter((milestone) => item.milestoneAt?.[milestone.id]).map((milestone) => milestone.label).join(', ') || '—'])}

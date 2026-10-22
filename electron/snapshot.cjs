@@ -14,6 +14,8 @@ function buildSnapshot(db, filters = {}, options = {}) {
   const engineHash = createHash('sha256')
     .update(fs.readFileSync(__filename))
     .update(fs.readFileSync(require.resolve('./metrics.cjs')))
+    .update(fs.readFileSync(require.resolve('./semantic-mapping.cjs')))
+    .update(fs.readFileSync(require.resolve('./team-attribution.cjs')))
     .update(fs.readFileSync(require.resolve('./database.cjs')))
     .digest('hex');
   const asOfDate = new Date().toISOString().slice(0, 10);

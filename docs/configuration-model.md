@@ -12,7 +12,8 @@ The profile contains:
 
 - Organization display name, locale, and timezone.
 - Selected Jira project keys and logical roles such as product intake, technical delivery, and commitments.
-- Teams with stable IDs, display names, aliases, and optional active dates; Agile boards reference team IDs.
+- Teams with stable IDs, display names, aliases, optional parent IDs, and inclusive UTC active dates. Report rows retain the team ID alongside the display name.
+- Effective-dated board-to-team routes, project defaults, component assignments, and reviewed issue-specific overrides. A board may move to another team through non-overlapping dated routes.
 - Field bindings scoped by semantic key, project, and issue type. Provider field IDs are data supplied by the connected Jira catalog or the user, validated before persistence, and never interpolated into SQL or URL paths.
 - Separate workflow policies for delivery, intake, and commitments, including completion and optional lifecycle/milestone states.
 - Calendar timezone, weekdays, hours, holidays, and effective work intervals.
@@ -28,7 +29,9 @@ The provider registry currently exposes offline JSON import and Jira Server/Data
 
 More specific field bindings take precedence: issue type plus project, then project, then workspace-wide; an issue-type-only binding applies between project-specific and workspace-wide bindings. Overlapping bindings at equal scope are rejected for the same semantic key. A source field actively mapped to multiple meanings is allowed as an explicit alias and surfaced in data-quality findings for review. The changelog resolver uses the issue's current project and issue type for configured field IDs and names; it leaves conflicting or out-of-scope configured IDs unmapped instead of guessing from a familiar display name.
 
-Team assignment follows configured board and field mappings plus explicit user overrides. Team names and aliases are case-insensitively unique across teams; ambiguous labels are rejected at profile validation. When an issue's configured team differs from its sprint board route, the configured team remains the report attribution and a data-quality warning records the disagreement. Unknown or ambiguous issue-team values fall back to the board route with a warning. If neither source resolves a team, the issue remains in universal totals and is excluded from team-specific totals.
+Team attribution uses the first active source in this order: issue-specific override, configured team field, board route, component assignment, then project default. Dates are inclusive UTC calendar dates. Delivery reports evaluate the assignment at the actual sprint end; commitment reports use the commitment-entry date or sprint start. The source selected for a row retains its stable team ID and hierarchy path. Other active sources that disagree remain visible as attribution conflicts.
+
+Team names and aliases are case-insensitively unique across teams; ambiguous labels are rejected at profile validation. Unknown, inactive, ambiguous, and conflicting source values remain separate data-quality states. If no active source resolves an issue-sprint relationship, the relationship stays in universal counts, is excluded from team-only aggregates, and appears in the team-report exclusion count and detail list. Board routing is optional when another supported team source is configured. Portfolio Epic team groups use distinct child issue keys with sprint attribution; a child that moved between teams can appear in more than one team subtotal, while the Epic's universal child total stays unique.
 
 Workflow policies are scoped by logical role. Status-category completion can be used when the provider supplies it; named status mappings are versioned. Request, commitment, and delivery completion do not inherit one another's policy.
 

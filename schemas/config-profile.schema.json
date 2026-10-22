@@ -51,13 +51,23 @@
           "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" },
           "name": { "type": "string", "minLength": 1, "maxLength": 160 },
           "aliases": { "type": "array", "items": { "type": "string", "maxLength": 160 } },
-          "activeFrom": { "type": "string" },
-          "activeTo": { "type": "string" }
+          "parentTeamId": { "type": "string", "maxLength": 80 },
+          "activeFrom": { "type": "string", "maxLength": 10 },
+          "activeTo": { "type": "string", "maxLength": 10 }
         },
         "additionalProperties": false
       }
     },
-    "boardRoutes": { "type": "array", "items": { "type": "object", "required": ["boardId", "teamId"], "properties": { "boardId": { "type": "string", "pattern": "^\\d+$" }, "teamId": { "type": "string" }, "team": { "type": "string" } }, "additionalProperties": false } },
+    "boardRoutes": { "type": "array", "items": { "type": "object", "required": ["boardId", "teamId"], "properties": { "boardId": { "type": "string", "pattern": "^\\d+$" }, "teamId": { "type": "string" }, "team": { "type": "string" }, "activeFrom": { "type": "string", "maxLength": 10 }, "activeTo": { "type": "string", "maxLength": 10 } }, "additionalProperties": false } },
+    "teamAssignments": {
+      "type": "object",
+      "properties": {
+        "projects": { "type": "array", "items": { "type": "object", "required": ["projectKey", "teamId"], "properties": { "projectKey": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "teamId": { "type": "string" }, "activeFrom": { "type": "string", "maxLength": 10 }, "activeTo": { "type": "string", "maxLength": 10 } }, "additionalProperties": false } },
+        "components": { "type": "array", "items": { "type": "object", "required": ["projectKey", "teamId"], "properties": { "projectKey": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "componentId": { "type": "string" }, "componentName": { "type": "string" }, "teamId": { "type": "string" }, "activeFrom": { "type": "string", "maxLength": 10 }, "activeTo": { "type": "string", "maxLength": 10 } }, "additionalProperties": false } },
+        "issueOverrides": { "type": "array", "items": { "type": "object", "required": ["issueKey", "teamId"], "properties": { "issueKey": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*-\\d+$" }, "teamId": { "type": "string" }, "activeFrom": { "type": "string", "maxLength": 10 }, "activeTo": { "type": "string", "maxLength": 10 } }, "additionalProperties": false } }
+      },
+      "additionalProperties": false
+    },
     "fieldMappings": { "type": "array", "items": { "type": "object", "required": ["semanticKey", "providerFieldId"], "properties": { "semanticKey": { "type": "string" }, "providerFieldId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$" }, "providerFieldName": { "type": "string", "maxLength": 200 }, "projectKey": { "type": "string" }, "issueTypeId": { "type": "string" }, "transform": { "enum": ["identity", "number", "text", "option-label", "id-list", "boolean"] } }, "additionalProperties": false } },
     "workflows": { "type": "object", "additionalProperties": { "type": "object" } },
     "calendar": { "type": "object", "required": ["configured", "timeZone", "workingDays", "hoursPerDay", "holidays"], "properties": { "configured": { "type": "boolean" }, "timeZone": { "type": "string" }, "workingDays": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 6 } }, "hoursPerDay": { "type": "number", "exclusiveMinimum": 0, "maximum": 24 }, "holidays": { "type": "array", "items": { "type": "string", "format": "date" } }, "workIntervals": { "type": "array" } }, "additionalProperties": false },

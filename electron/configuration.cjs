@@ -22,6 +22,7 @@ const DEFAULT_CONFIG = Object.freeze({
   projectRoles: { productIntake: [], technicalDelivery: [], commitments: [] },
   teams: [],
   boardRoutes: [],
+  teamAssignments: { projects: [], components: [], issueOverrides: [] },
   fieldMappings: [],
   workClassifications: [],
   issueTypeClassifications: [],
@@ -96,6 +97,7 @@ function normalizeConfig(input = {}) {
     id: asString(team.id, 80),
     name: asString(team.name, 160),
     aliases: stringList(team.aliases, 160),
+    parentTeamId: asString(team.parentTeamId, 80),
     activeFrom: asString(team.activeFrom, 32),
     activeTo: asString(team.activeTo, 32),
   }));
@@ -108,15 +110,34 @@ function normalizeConfig(input = {}) {
     if (!teamId && legacyName) {
       let team = teamByName.get(legacyName.toLocaleLowerCase());
       if (!team) {
-        team = { id: stableLegacyTeamId(legacyName), name: legacyName, aliases: [], activeFrom: '', activeTo: '' };
+        team = { id: stableLegacyTeamId(legacyName), name: legacyName, aliases: [], parentTeamId: '', activeFrom: '', activeTo: '' };
         teams.push(team);
         teamById.set(team.id, team);
         teamByName.set(team.name.toLocaleLowerCase(), team);
       }
       teamId = team.id;
     }
-    return { boardId, teamId, team: teamById.get(teamId)?.name || legacyName };
+    return {
+      boardId, teamId, team: teamById.get(teamId)?.name || legacyName,
+      activeFrom: asString(route.activeFrom, 32), activeTo: asString(route.activeTo, 32),
+    };
   });
+  const assignmentInput = isRecord(input.teamAssignments) ? input.teamAssignments : {};
+  const teamAssignments = {
+    projects: (Array.isArray(assignmentInput.projects) ? assignmentInput.projects : []).filter(isRecord).map((item) => ({
+      projectKey: asString(item.projectKey, 80).toUpperCase(), teamId: asString(item.teamId, 80),
+      activeFrom: asString(item.activeFrom, 32), activeTo: asString(item.activeTo, 32),
+    })),
+    components: (Array.isArray(assignmentInput.components) ? assignmentInput.components : []).filter(isRecord).map((item) => ({
+      projectKey: asString(item.projectKey, 80).toUpperCase(), componentId: asString(item.componentId, 80),
+      componentName: asString(item.componentName, 160), teamId: asString(item.teamId, 80),
+      activeFrom: asString(item.activeFrom, 32), activeTo: asString(item.activeTo, 32),
+    })),
+    issueOverrides: (Array.isArray(assignmentInput.issueOverrides) ? assignmentInput.issueOverrides : []).filter(isRecord).map((item) => ({
+      issueKey: asString(item.issueKey, 120).toUpperCase(), teamId: asString(item.teamId, 80),
+      activeFrom: asString(item.activeFrom, 32), activeTo: asString(item.activeTo, 32),
+    })),
+  };
   const defaults = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   const organization = { ...defaults.organization, ...(isRecord(input.organization) ? input.organization : {}) };
   const jiraUrl = asString(input.jiraUrl, 2000);
@@ -194,6 +215,7 @@ function normalizeConfig(input = {}) {
     projectRoles: Object.fromEntries(Object.keys(defaults.projectRoles).map((role) => [role, stringList(projectRoles[role], 80).map((key) => key.toUpperCase())])),
     teams,
     boardRoutes,
+    teamAssignments,
     fieldMappings,
     workClassifications,
     issueTypeClassifications,
@@ -223,6 +245,60 @@ function normalizeConfig(input = {}) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function assertActiveDates(value, label) {
+  for (const key of ['activeFrom', 'activeTo']) {
+    const date = String(value[key] || '');
+    if (!date) continue;
+    const parsed = new Date(`${date}T00:00:00.000Z`);
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(parsed.getTime())
+      && parsed.toISOString().slice(0, 10) === date, `${label} ${key} must be a valid ISO date.`);
+  }
+  assert(!value.activeFrom || !value.activeTo || value.activeFrom <= value.activeTo,
+    `${label} activeFrom must not be later than activeTo.`);
+}
+
+function rangesOverlap(left, right) {
+  const leftStart = left.activeFrom || '0000-01-01';
+  const leftEnd = left.activeTo || '9999-12-31';
+  const rightStart = right.activeFrom || '0000-01-01';
+  const rightEnd = right.activeTo || '9999-12-31';
+  return leftStart <= rightEnd && rightStart <= leftEnd;
+}
+
+function validateAssignmentSet(items, scopeKey, label) {
+  items.forEach((item, index) => {
+    assertActiveDates(item, label);
+    for (let otherIndex = 0; otherIndex < index; otherIndex += 1) {
+      const other = items[otherIndex];
+      assert(scopeKey(item) !== scopeKey(other) || !rangesOverlap(item, other),
+        `${label} has overlapping effective dates for ${scopeKey(item)}.`);
+    }
+  });
+}
+
+function validateTeamAssignments(config) {
+  const teamIds = new Set(config.teams.map((team) => team.id));
+  const validateReference = (item, label) => assert(teamIds.has(item.teamId), `${label} references an unknown team.`);
+  config.teamAssignments.projects.forEach((item) => {
+    assert(config.projects.includes(item.projectKey), `Project team assignment references an unselected project: ${item.projectKey}`);
+    validateReference(item, `Project ${item.projectKey}`);
+  });
+  validateAssignmentSet(config.teamAssignments.projects, (item) => item.projectKey, 'Project team assignment');
+  config.teamAssignments.components.forEach((item) => {
+    assert(config.projects.includes(item.projectKey), `Component team assignment references an unselected project: ${item.projectKey}`);
+    assert(item.componentId || item.componentName, 'Component team assignments need a component ID or name.');
+    validateReference(item, `Component ${item.componentId || item.componentName}`);
+  });
+  validateAssignmentSet(config.teamAssignments.components,
+    (item) => `${item.projectKey}|${item.componentId || item.componentName.toLocaleLowerCase('en-US')}`, 'Component team assignment');
+  config.teamAssignments.issueOverrides.forEach((item) => {
+    assert(/^[A-Z][A-Z0-9_]*-\d+$/.test(item.issueKey), `Invalid issue key in team override: ${item.issueKey}`);
+    assert(config.projects.includes(item.issueKey.split('-')[0]), `Issue team override references an unselected project: ${item.issueKey}`);
+    validateReference(item, `Issue ${item.issueKey}`);
+  });
+  validateAssignmentSet(config.teamAssignments.issueOverrides, (item) => item.issueKey, 'Issue team override');
 }
 
 function validateConfig(input) {
@@ -256,8 +332,20 @@ function validateConfig(input) {
   config.teams.forEach((team) => {
     assert(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(team.id), 'Every team needs a stable ID.');
     assert(team.name.length > 0, `Team ${team.id} needs a display name.`);
+    assert(team.parentTeamId !== team.id, `Team ${team.id} cannot be its own parent.`);
+    assert(!team.parentTeamId || config.teams.some((candidate) => candidate.id === team.parentTeamId), `Team ${team.id} references an unknown parent team.`);
     assert(!teamIds.has(team.id), `Duplicate team ID: ${team.id}`);
+    assertActiveDates(team, `Team ${team.id}`);
     teamIds.add(team.id);
+  });
+  config.teams.forEach((team) => {
+    const visited = new Set([team.id]);
+    let parent = team.parentTeamId;
+    while (parent) {
+      assert(!visited.has(parent), `Team hierarchy contains a cycle at ${parent}.`);
+      visited.add(parent);
+      parent = config.teams.find((candidate) => candidate.id === parent)?.parentTeamId || '';
+    }
   });
   const teamLabels = new Map();
   config.teams.forEach((team) => {
@@ -279,14 +367,14 @@ function validateConfig(input) {
     assert(item.overrideWorkingDays === null || Number.isFinite(item.overrideWorkingDays) && item.overrideWorkingDays >= 0 && item.overrideWorkingDays <= 366, 'Override working days must be between 0 and 366.');
     assert(Number.isFinite(item.allocation) && item.allocation >= 0 && item.allocation <= 1, 'Capacity allocation must be between 0 and 1.');
   });
-  const boardIds = new Set();
   config.boardRoutes.forEach((route) => {
     assert(/^\d+$/.test(route.boardId), `Invalid board ID: ${route.boardId}`);
     assert(teamIds.has(route.teamId), `Board ${route.boardId} references an unknown team.`);
-    assert(!boardIds.has(route.boardId), `Board ${route.boardId} has more than one team mapping.`);
-    boardIds.add(route.boardId);
+    assertActiveDates(route, `Board ${route.boardId} route`);
     route.team = config.teams.find((team) => team.id === route.teamId).name;
   });
+  validateAssignmentSet(config.boardRoutes, (route) => route.boardId, 'Board team route');
+  validateTeamAssignments(config);
 
   for (const [role, projects] of Object.entries(config.projectRoles)) {
     projects.forEach((key) => assert(config.projects.includes(key), `Project role ${role} references an unselected project: ${key}`));
@@ -358,7 +446,7 @@ function validateConfig(input) {
   for (const [key, enabled] of Object.entries(config.modules)) assert(typeof enabled === 'boolean', `Module setting ${key} must be boolean.`);
   if (config.modules.delivery) {
     assert(config.projectRoles.technicalDelivery.length > 0, 'Delivery intelligence needs at least one technical delivery project.');
-    assert(config.boardRoutes.length > 0, 'Delivery intelligence needs at least one board-to-team mapping.');
+    assert(hasTeamAttribution(config), 'Delivery intelligence needs at least one configured team attribution source.');
     assert(config.fieldMappings.some((binding) => binding.semanticKey === 'sprint'), 'Delivery intelligence needs a sprint field mapping.');
   }
   if (config.modules.portfolio) assert(config.projectRoles.technicalDelivery.length > 0, 'Portfolio needs at least one technical delivery project.');
@@ -369,7 +457,7 @@ function validateConfig(input) {
     assert(config.fieldMappings.some((binding) => binding.semanticKey === 'storyPoints'), 'Sprint commitments need a story-points mapping.');
     assert(config.fieldMappings.some((binding) => binding.semanticKey === 'sprint'), 'Sprint commitments need a sprint mapping.');
     assert(config.workflows.commitment.entryStatuses.length > 0, 'Sprint commitments need commitment entry statuses.');
-    assert(config.boardRoutes.length > 0, 'Sprint commitments need board-to-team mappings.');
+    assert(hasTeamAttribution(config), 'Sprint commitments need at least one configured team attribution source.');
   }
   if (config.modules.organizationAnalytics) {
     assert(config.projectRoles.productIntake.length > 0, 'Organization analytics needs an intake project.');
@@ -384,6 +472,14 @@ function validateConfig(input) {
     assert(Number.isInteger(value) && value >= 1 && value <= 20, `${key} must be an integer from 1 to 20.`);
   }
   return config;
+}
+
+function hasTeamAttribution(config) {
+  return config.boardRoutes.length > 0
+    || (config.teams.length > 0 && config.fieldMappings.some((binding) => binding.semanticKey === 'team'))
+    || config.teamAssignments.projects.length > 0
+    || config.teamAssignments.components.length > 0
+    || config.teamAssignments.issueOverrides.length > 0;
 }
 
 function configurationFingerprint(config) {

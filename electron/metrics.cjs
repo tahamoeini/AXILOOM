@@ -1,4 +1,5 @@
 const { resolveSemanticBinding, resolveSemanticFields, semanticHistoryField, transformValue, configuredCompletedStatuses, isIssueDone } = require('./semantic-mapping.cjs');
+const { isActiveAt, resolveBoardTeam, resolveTeamAttribution } = require('./team-attribution.cjs');
 
 const KNOWN_FIELDS = new Set([
   'assignee', 'components', 'created', 'issuelinks', 'priority', 'issuetype',
@@ -92,6 +93,18 @@ function currentTags(value) {
   if (Array.isArray(value)) return value.map((tag) => typeof tag === 'string' ? tag : tag?.value).filter(Boolean);
   if (value && typeof value === 'object') return [value.value].filter(Boolean);
   return [];
+}
+
+function configuredTeamPath(config, teamId) {
+  const path = [];
+  const visited = new Set();
+  let team = (config.teams || []).find((candidate) => candidate.id === teamId);
+  while (team && !visited.has(team.id)) {
+    visited.add(team.id);
+    path.unshift(team.name);
+    team = (config.teams || []).find((candidate) => candidate.id === team.parentTeamId);
+  }
+  return path;
 }
 
 function parseTags(value) {
@@ -278,11 +291,13 @@ function makeRelation(issue, sprint, interval, config) {
   const addedAfterStart = !atStart;
   const workType = tagDuringSprint || addedAfterStart ? 'Ad hoc' : 'Planned';
   const teamValue = valueAt(issue, 'team', issue.semantic.team, sprint.window.endMs, (value) => value && typeof value === 'object' ? value.value || value.name || '' : String(value || ''));
-  const teamCandidates = config.teams.filter((team) => [team.name, ...(team.aliases || [])].some((label) => String(label).trim().toLocaleLowerCase('en-US') === String(teamValue || '').trim().toLocaleLowerCase('en-US')));
-  const assignedTeam = teamCandidates.length === 1 ? teamCandidates[0].name : sprint.teamRoute;
-  const teamFieldConflict = teamCandidates.length === 1 && Boolean(sprint.teamRoute) && teamCandidates[0].name !== sprint.teamRoute;
-  const teamFieldAmbiguous = Boolean(String(teamValue || '').trim()) && teamCandidates.length > 1;
-  const teamFieldUnmapped = Boolean(String(teamValue || '').trim()) && teamCandidates.length === 0;
+  const attribution = resolveTeamAttribution(issue, sprint, config, teamValue, sprint.window.endMs);
+  const assignedTeam = attribution.team?.name || '';
+  const teamFieldConflict = attribution.source === 'configured team field'
+    && attribution.conflicts.some((conflict) => conflict.source === 'board mapping');
+  const teamFieldAmbiguous = attribution.fieldValue && attribution.fieldStatus === 'ambiguous';
+  const teamFieldUnmapped = attribution.fieldValue && attribution.fieldStatus === 'unmapped';
+  const teamFieldInactive = attribution.fieldValue && attribution.fieldStatus === 'inactive';
   const classificationValue = valueAt(issue, 'workClassification', issue.semantic.workClassification, sprint.window.endMs, (value) => value && typeof value === 'object' ? value.value || value.name || '' : String(value || ''));
   const configuredClassification = (config.workClassifications || []).find((classification) => [classification.label, ...(classification.aliases || [])].some((label) => String(label).trim().toLocaleLowerCase('en-US') === String(classificationValue || '').trim().toLocaleLowerCase('en-US')));
   const workClassification = configuredClassification?.id || 'unclassified';
@@ -306,10 +321,21 @@ function makeRelation(issue, sprint, interval, config) {
     sprint,
     membershipIntervals: interval,
     team: assignedTeam,
-    teamAttributionSource: teamCandidates.length === 1 ? 'configured team field' : 'board mapping',
+    teamId: attribution.teamId,
+    teamPath: attribution.teamPath,
+    teamAttributionSource: attribution.source,
+    teamAttributionConflicts: attribution.conflicts,
     teamFieldConflict,
     teamFieldAmbiguous,
     teamFieldUnmapped,
+    teamFieldInactive,
+    teamOverrideInactive: attribution.issueOverrideStatus === 'inactive',
+    boardTeamInactive: attribution.boardStatus === 'inactive',
+    boardTeamAmbiguous: attribution.boardStatus === 'ambiguous',
+    componentTeamAmbiguous: attribution.componentStatus === 'ambiguous',
+    componentTeamInactive: attribution.componentStatus === 'inactive',
+    projectTeamAmbiguous: attribution.projectStatus === 'ambiguous',
+    projectTeamInactive: attribution.projectStatus === 'inactive',
     assignee: latestAssignee,
     atStart,
     atEnd,
@@ -543,6 +569,9 @@ function buildIssueRows(rawIssues, config) {
     const fields = issue.fields || {};
     const semantic = resolveSemanticFields(issue, config);
     const currentSprintIds = Array.from(parseIds(semantic.sprint));
+    const teamValue = jiraOptionLabel(semantic.team);
+    const assignmentTime = Date.parse(fields.updated || fields.created || '') || Date.now();
+    const attribution = resolveTeamAttribution(issue, {}, config, teamValue, assignmentTime);
     return {
       id: String(issue.id || ''),
       key: String(issue.key || '').toUpperCase(),
@@ -564,7 +593,10 @@ function buildIssueRows(rawIssues, config) {
       epicName: semantic.epicName || '',
       currentSprintIds,
       workClassification: jiraOptionLabel(semantic.workClassification),
-      team: jiraOptionLabel(semantic.team),
+      team: teamValue,
+      teamId: attribution.teamId,
+      teamPath: attribution.teamPath,
+      teamAttributionSource: attribution.source,
       requester: jiraOptionLabel(semantic.requester),
       department: jiraOptionLabel(semantic.department),
       productOwner: jiraOptionLabel(semantic.productOwner),
@@ -671,7 +703,7 @@ function buildDataQuality(rawIssues, rawSprints, importRuns, conflicts, config =
   if (unknownFields.size) findings.push({ severity: 'info', code: 'UNKNOWN_FIELDS_PRESERVED', count: unknownFields.size, message: `فیلدهای جدید حفظ شده‌اند: ${Array.from(unknownFields).slice(0, 12).join(', ')}${unknownFields.size > 12 ? '، …' : ''}` });
   if (conflicts.length) findings.push({ severity: 'warning', code: 'IMPORT_CONFLICTS', count: conflicts.length, message: `${conflicts.length} تعارض نسخه یا شناسه در import ثبت شده است.` });
   const unmappedSprints = rawSprints.filter((sprint) => !sprint.teamRoute).length;
-  if (unmappedSprints) findings.push({ severity: 'warning', code: 'SPRINT_BOARD_UNMAPPED', count: unmappedSprints, message: `${unmappedSprints} اسپرینت به تیم گزارش‌دهنده نگاشت نشده است.` });
+  if (unmappedSprints) findings.push({ severity: 'info', code: 'SPRINT_BOARD_UNMAPPED', count: unmappedSprints, message: `${unmappedSprints} boardها نگاشت تیم ندارند؛ نگاشت issue، component یا project همچنان می‌تواند تیم گزارش را تعیین کند.` });
   const invalidPlannedDates = rawSprints.filter((sprint) => {
     const start = Date.parse(sprint.startDate || '');
     const end = Date.parse(sprint.endDate || '');
@@ -704,21 +736,23 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
       raw,
     };
   });
-  const routeMap = new Map((config.boardRoutes || []).map((route) => [String(route.boardId), route.team || config.teams.find((team) => team.id === route.teamId)?.name || '']));
   const normalizedSprints = rawSprints.map((raw) => {
     const boardId = String(raw.originBoardId ?? '');
-    const teamRoute = routeMap.get(boardId) || null;
     const window = extractActualSprint(raw, nowMs);
     const plannedStart = Date.parse(raw.startDate || '');
     const plannedEnd = Date.parse(raw.endDate || '');
+    const route = resolveBoardTeam(config, boardId, window?.endMs ?? plannedEnd, raw.teamRoute || '');
     return {
       ...raw,
       id: String(raw.id),
       boardId,
-      teamRoute,
+      teamRoute: route.team?.name || null,
+      teamRouteId: route.teamId,
+      teamRoutePath: route.teamPath,
+      teamRouteStatus: route.status,
       window,
       plannedWorkingDays: config.calendar?.configured && Number.isFinite(plannedStart) && Number.isFinite(plannedEnd) ? workingDays(plannedStart, plannedEnd, config.calendar) : null,
-      reportEligible: Boolean(teamRoute && window),
+      reportEligible: Boolean(window),
       name: raw.name || `Sprint ${raw.id}`,
     };
   });
@@ -727,7 +761,6 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
   const relations = [];
   const quality = buildDataQuality(rawIssues, normalizedSprints, importRuns, conflicts, config);
   normalizedSprints.forEach((sprint) => {
-    if (!sprint.teamRoute) return;
     if (!sprint.window) {
       quality.findings.push({ severity: 'warning', code: 'SPRINT_BOUNDARY_INCOMPLETE', count: 1, message: `مرز واقعی ${sprint.name} کامل نیست؛ متریک تحویل برای آن محاسبه نشد.` });
       return;
@@ -746,9 +779,21 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
         quality.findings.push({ severity: 'warning', code: 'TEAM_ATTRIBUTION_CONFLICT', count: 1, message: `${issue.key} is attributed to ${relation.team} by its configured team field, but ${sprint.name} is routed to ${sprint.teamRoute}; the configured field remains the reported attribution.` });
       }
       if (relation.teamFieldAmbiguous) {
-        quality.findings.push({ severity: 'warning', code: 'TEAM_FIELD_AMBIGUOUS', count: 1, message: `${issue.key} has a team value matching multiple configured teams; board routing is used for ${sprint.name}.` });
+        quality.findings.push({ severity: 'warning', code: 'TEAM_FIELD_AMBIGUOUS', count: 1, message: `${issue.key} has a team value matching multiple configured teams; the next configured attribution source is used for ${sprint.name} when available.` });
       } else if (relation.teamFieldUnmapped) {
-        quality.findings.push({ severity: 'warning', code: 'TEAM_FIELD_UNMAPPED', count: 1, message: `${issue.key} has an unrecognized team value; board routing is used for ${sprint.name}.` });
+        quality.findings.push({ severity: 'warning', code: 'TEAM_FIELD_UNMAPPED', count: 1, message: `${issue.key} has an unrecognized team value; a lower-priority assignment is used for ${sprint.name} when available.` });
+      }
+      if (relation.teamFieldInactive) quality.findings.push({ severity: 'warning', code: 'TEAM_FIELD_INACTIVE', count: 1, message: `${issue.key} has a team value outside that team's active dates; a lower-priority assignment is used for ${sprint.name} when available.` });
+      if (relation.boardTeamInactive) quality.findings.push({ severity: 'warning', code: 'BOARD_TEAM_INACTIVE', count: 1, message: `${sprint.name} has a board team mapping outside its effective dates.` });
+      if (relation.boardTeamAmbiguous) quality.findings.push({ severity: 'warning', code: 'BOARD_TEAM_AMBIGUOUS', count: 1, message: `${sprint.name} has multiple active team mappings for its board.` });
+      if (relation.teamOverrideInactive) quality.findings.push({ severity: 'warning', code: 'TEAM_OVERRIDE_INACTIVE', count: 1, message: `${issue.key} has an issue-team override outside its effective dates.` });
+      if (relation.componentTeamAmbiguous) quality.findings.push({ severity: 'warning', code: 'COMPONENT_TEAM_AMBIGUOUS', count: 1, message: `${issue.key} components map to multiple active teams; the next attribution source is used.` });
+      if (relation.componentTeamInactive) quality.findings.push({ severity: 'info', code: 'COMPONENT_TEAM_INACTIVE', count: 1, message: `${issue.key} has component team mappings outside their effective dates.` });
+      if (relation.projectTeamAmbiguous) quality.findings.push({ severity: 'warning', code: 'PROJECT_TEAM_AMBIGUOUS', count: 1, message: `${issue.key} project maps to multiple active teams; the next attribution source is used.` });
+      if (relation.projectTeamInactive) quality.findings.push({ severity: 'info', code: 'PROJECT_TEAM_INACTIVE', count: 1, message: `${issue.key} has a project team mapping outside its effective dates.` });
+      if (!relation.teamFieldConflict && relation.teamAttributionConflicts.length) {
+        const sources = relation.teamAttributionConflicts.map((conflict) => `${conflict.source}: ${conflict.team}`).join(', ');
+        quality.findings.push({ severity: 'warning', code: 'TEAM_ATTRIBUTION_CONFLICT', count: 1, message: `${issue.key} uses ${relation.team} from ${relation.teamAttributionSource}; other active sources disagree (${sources}).` });
       }
       if (!relation.team) {
         quality.findings.push({ severity: 'warning', code: 'UNMAPPED_TEAM', count: 1, message: `${issue.key} in ${sprint.name} has no team attribution and is excluded from team-level totals.` });
@@ -869,6 +914,8 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const key = `${relation.team}|${relation.sprint.id}|${personKey}`;
     if (!personCapacity.has(key)) personCapacity.set(key, {
       team: relation.team,
+      teamId: relation.teamId,
+      teamPath: relation.teamPath,
       sprint: relation.sprint,
       assignee: relation.assignee,
       capacityHours: relation.sprint.plannedWorkingDays * Number(config.calendar.hoursPerDay) * allocation,
@@ -879,7 +926,8 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const sprintId = String(item.sprintId || '');
     const assigneeKey = String(item.assigneeKey || '');
     if (!team || !sprintId || !assigneeKey) return;
-    const sprint = normalizedSprints.find((candidate) => candidate.id === sprintId && candidate.window && candidate.teamRoute === team);
+    const sprint = normalizedSprints.find((candidate) => candidate.id === sprintId && candidate.window
+      && (candidate.teamRoute === team || relations.some((relation) => relation.sprint.id === sprintId && relation.team === team)));
     if (!sprint) return;
     const key = `${team}|${sprintId}|${assigneeKey}`;
     const current = personCapacity.get(key);
@@ -890,6 +938,8 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const allocation = Number.isFinite(Number(item.allocation)) ? Math.max(0, Math.min(1, Number(item.allocation))) : 1;
     personCapacity.set(key, {
       team, sprint, assignee, capacityHours: Math.max(0, days) * Number(config.calendar.hoursPerDay) * allocation,
+      teamId: current?.teamId || config.teams.find((candidate) => candidate.name === team)?.id || '',
+      teamPath: current?.teamPath || configuredTeamPath(config, config.teams.find((candidate) => candidate.name === team)?.id || ''),
       manualOverride: true,
     });
   });
@@ -899,13 +949,12 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
   });
   const sprintGroups = new Map();
   const sprintByGroup = new Map();
-  normalizedSprints.filter((sprint) => sprint.reportEligible && sprint.window).forEach((sprint) => {
-    const reportingTeams = [sprint.teamRoute];
-    reportingTeams.forEach((team) => {
-      const key = `${team}|${sprint.id}`;
-      sprintGroups.set(key, []);
-      sprintByGroup.set(key, sprint);
-    });
+  normalizedSprints.filter((sprint) => sprint.reportEligible && sprint.window && sprint.teamRoute).forEach((sprint) => {
+    const routedTeam = config.teams.find((team) => team.id === sprint.teamRouteId);
+    if (!routedTeam || !isActiveAt(routedTeam, sprint.window.endMs)) return;
+    const key = `${routedTeam.name}|${sprint.id}`;
+    sprintGroups.set(key, []);
+    sprintByGroup.set(key, sprint);
   });
   relations.forEach((relation) => {
     const key = `${relation.team}|${relation.sprint.id}`;
@@ -921,6 +970,8 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const capacityHours = config.calendar?.configured ? capacityBySprint.get(`${team}|${sprint.id}`) ?? 0 : null;
     const metric = {
       team,
+      teamId: rows[0]?.teamId || sprint.teamRouteId || '',
+      teamPath: rows[0]?.teamPath || sprint.teamRoutePath || [team],
       sprintId: sprint.id,
       sprintName: sprint.name,
       state: sprint.state || '',
@@ -970,6 +1021,8 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
       'operationCapConsumption', 'regulatoryCapConsumption', 'allocationStatus', 'capacityTargets'].forEach((key) => { delete scope[key]; });
     personMetrics.push({
       team: first.team,
+      teamId: first.teamId || config.teams.find((candidate) => candidate.name === first.team)?.id || '',
+      teamPath: first.teamPath || configuredTeamPath(config, first.teamId || config.teams.find((candidate) => candidate.name === first.team)?.id || ''),
       sprintId: first.sprint.id,
       sprintName: first.sprint.name,
       sprintOrder: sprintMetadata?.sprintOrder ?? null,
@@ -996,12 +1049,27 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
   const issueByKey = new Map(issues.map((issue) => [issue.key, issue]));
   const epics = issues.filter((issue) => issue.issueType.toLowerCase() === 'epic').map((epic) => {
     const children = issues.filter((issue) => issue.epicLink === epic.key);
+    const teamGroups = new Map();
+    children.forEach((child) => {
+      const historical = (relationRowsByIssue.get(child.key) || []).filter((relation) => relation.teamId && relation.team);
+      const identities = historical.length
+        ? historical.map((relation) => ({ teamId: relation.teamId, team: relation.team }))
+        : child.teamId && child.team ? [{ teamId: child.teamId, team: child.teamPath.at(-1) || child.team }] : [];
+      const seen = new Set();
+      identities.forEach((identity) => {
+        if (!identity.teamId || seen.has(identity.teamId)) return;
+        seen.add(identity.teamId);
+        if (!teamGroups.has(identity.teamId)) teamGroups.set(identity.teamId, { teamId: identity.teamId, team: identity.team, issueKeys: new Set() });
+        teamGroups.get(identity.teamId).issueKeys.add(child.key);
+      });
+    });
     return {
       ...epic,
       childrenCount: children.length,
       childrenDone: children.filter((child) => child.isDone).length,
       childStoryPoints: sumKnown(children, (child) => child.points),
       technicalProjects: Array.from(new Set(children.filter((child) => (config.projectRoles?.technicalDelivery || []).includes(child.project)).map((child) => child.project))),
+      teamGroups: Array.from(teamGroups.values()).map((group) => ({ teamId: group.teamId, team: group.team, issueCount: group.issueKeys.size })),
       childKeys: children.map((child) => child.key),
     };
   });
@@ -1012,6 +1080,7 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     sprintCount: rawSprints.length,
     reportableSprints: sprintMetrics.length,
     relationCount: relations.length,
+    unmappedTeamRelationCount: quality.findings.filter((finding) => finding.code === 'UNMAPPED_TEAM').reduce((sum, finding) => sum + finding.count, 0),
     warningCount: quality.findings.filter((finding) => finding.severity === 'warning').reduce((sum, finding) => sum + finding.count, 0),
     issuesWithoutAssignee: issues.filter((issue) => !issue.assigneeKey).length,
     lastIssueUpdate: issues.map((issue) => issue.updated).filter(Boolean).sort().at(-1) || null,
@@ -1150,6 +1219,7 @@ function publicSnapshot(metrics, productRecords, importRuns, conflicts, filters 
     key: epic.key, summary: epic.summary || epic.epicName, project: epic.project, status: epic.status,
     assignee: epic.assignee, childrenCount: epic.childrenCount, childrenDone: epic.childrenDone,
     childStoryPoints: epic.childStoryPoints, technicalProjects: epic.technicalProjects,
+    teamGroups: epic.teamGroups || [],
     linkedProducts: productLinks.get(epic.key) || [],
   }));
   const relationsByIssue = new Map();
@@ -1159,13 +1229,13 @@ function publicSnapshot(metrics, productRecords, importRuns, conflicts, filters 
     relationsByIssue.get(key).push(relation);
   });
   const sprints = metrics.sprintMetrics.filter((metric) => !selectedTeam || metric.team === selectedTeam).map((metric) => ({
-    team: metric.team, sprintId: metric.sprintId, sprintName: metric.sprintName, state: metric.state,
+    team: metric.team, teamId: metric.teamId, teamPath: metric.teamPath, sprintId: metric.sprintId, sprintName: metric.sprintName, state: metric.state,
     sprintOrder: metric.sprintOrder, calendarDays: metric.calendarDays, workingDays: metric.workingDays,
     startDate: metric.startDate, endDate: metric.endDate, plannedWorkingDays: metric.plannedWorkingDays,
     ...metric.scope,
   }));
   const people = metrics.personMetrics.filter((metric) => !selectedTeam || metric.team === selectedTeam).map((metric) => ({
-    team: metric.team, sprintId: metric.sprintId, sprintName: metric.sprintName, sprintOrder: metric.sprintOrder,
+    team: metric.team, teamId: metric.teamId, teamPath: metric.teamPath, sprintId: metric.sprintId, sprintName: metric.sprintName, sprintOrder: metric.sprintOrder,
     calendarDays: metric.calendarDays, workingDays: metric.workingDays, startDate: metric.startDate, endDate: metric.endDate,
     assigneeKey: metric.assigneeKey, assignee: metric.assignee,
     ...metric.scope,
@@ -1383,6 +1453,9 @@ function compactMetricsForCache(metrics, config = {}) {
   };
   const compactRelation = (relation) => ({
     team: relation.team,
+    teamId: relation.teamId,
+    teamPath: relation.teamPath,
+    teamAttributionSource: relation.teamAttributionSource,
     issue: { key: relation.issue?.key },
     sprint: {
       id: relation.sprint?.id,
@@ -1407,7 +1480,8 @@ function compactMetricsForCache(metrics, config = {}) {
     sprints: metrics.sprints.map((sprint) => ({
       id: sprint.id, name: sprint.name, state: sprint.state,
       startDate: sprint.startDate, endDate: sprint.endDate,
-      teamRoute: sprint.teamRoute, plannedWorkingDays: sprint.plannedWorkingDays,
+      teamRoute: sprint.teamRoute, teamRouteId: sprint.teamRouteId, teamRoutePath: sprint.teamRoutePath,
+      plannedWorkingDays: sprint.plannedWorkingDays,
     })),
     sprintMetrics: metrics.sprintMetrics.map(compactGroup),
     personMetrics: metrics.personMetrics.map(compactGroup),
@@ -1417,6 +1491,7 @@ function compactMetricsForCache(metrics, config = {}) {
       project: epic.project, status: epic.status, assignee: epic.assignee,
       childrenCount: epic.childrenCount, childrenDone: epic.childrenDone,
       childStoryPoints: epic.childStoryPoints, technicalProjects: epic.technicalProjects,
+      teamGroups: epic.teamGroups || [],
       childKeys: epic.childKeys,
     })),
     quality: metrics.quality,

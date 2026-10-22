@@ -708,6 +708,11 @@ button:focus-visible, summary:focus-visible, a:focus-visible, [tabindex]:focus-v
 .role-grid legend,.workflow-fieldset legend { padding: 0 5px; color: #42616c; font-size: 12px; font-weight: 700; }
 .team-list,.route-list,.mapping-list { display: grid; gap: 8px; margin: 12px 0; }
 .team-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)) auto; align-items: end; gap: 9px; padding: 10px; border: 1px solid #e6edef; border-radius: 9px; }
+.team-registry-row { grid-template-columns: 1fr 1.2fr 1.2fr 1fr 1fr 1fr auto; }
+.assignment-row { grid-template-columns: 1fr 1fr 1fr 1fr auto; }
+.assignment-component-row { grid-template-columns: .8fr 1fr 1fr 1fr 1fr 1fr auto; }
+.board-route-row { grid-template-columns: .8fr 1fr 1fr 1fr auto; }
+.settings-panel > h3 { margin: 18px 0 5px; color: #526a78; font-size: 13px; }
 .team-row .form-field span,.mapping-row .form-field span { font-size: 10px; }
 .mapping-row { display: grid; grid-template-columns: 1fr 1.4fr 1fr auto auto; align-items: end; gap: 9px; padding: 10px; border: 1px solid #e6edef; border-radius: 9px; }
 .mapping-row > small { padding-bottom: 11px; color: #82939b; font-size: 10px; }
@@ -735,5 +740,6 @@ button:focus-visible, summary:focus-visible, a:focus-visible, [tabindex]:focus-v
 .settings-page .callout.info { border: 1px solid #d5e8ed; background: #f4fafc; color: #4d6874; }
 .settings-page .callout.amber { border: 1px solid #f0d9ae; background: #fff9ec; color: #755b30; }
 .empty-state { padding: 14px; border: 1px dashed #d9e3e6; border-radius: 8px; color: #82939b; font-size: 12px; }
+@media (max-width: 1100px) { .team-registry-row,.assignment-row,.assignment-component-row,.board-route-row { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 900px) { .workspace-switcher { grid-template-columns: 1fr auto; }.workspace-path { grid-column: 1/-1; }.role-grid { grid-template-columns: 1fr; }.mapping-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.mapping-row > small { align-self: center; padding: 0; } }
-@media (max-width: 620px) { .settings-page .form-grid,.sync-facts { grid-template-columns: 1fr; }.team-row { grid-template-columns: 1fr; }.mapping-row { grid-template-columns: 1fr; }.workspace-switcher { grid-template-columns: 1fr; }.workspace-path { grid-column: auto; }.settings-savebar { align-items: flex-start; flex-direction: column; }.settings-savebar .button { width: 100%; justify-content: center; } }
+@media (max-width: 620px) { .settings-page .form-grid,.sync-facts { grid-template-columns: 1fr; }.team-row,.team-registry-row,.assignment-row,.assignment-component-row,.board-route-row { grid-template-columns: 1fr; }.mapping-row { grid-template-columns: 1fr; }.workspace-switcher { grid-template-columns: 1fr; }.workspace-path { grid-column: auto; }.settings-savebar { align-items: flex-start; flex-direction: column; }.settings-savebar .button { width: 100%; justify-content: center; } }

@@ -814,9 +814,15 @@ function saveConfig(db, value, eventType = 'user-update', sourceProfileJson = nu
   return next;
 }
 
-function routeForBoard(db, boardId) {
-  const routes = getConfig(db).boardRoutes || [];
-  return routes.find((route) => String(route.boardId) === String(boardId))?.team || null;
+function routeForBoard(db, boardId, timestamp = Date.now()) {
+  const config = getConfig(db);
+  const date = Number.isFinite(Number(timestamp)) ? new Date(Number(timestamp)).toISOString().slice(0, 10) : '';
+  const routes = (config.boardRoutes || []).filter((route) => String(route.boardId) === String(boardId)
+    && (!date || !route.activeFrom || date >= route.activeFrom) && (!date || !route.activeTo || date <= route.activeTo));
+  if (routes.length !== 1) return null;
+  const team = config.teams.find((candidate) => candidate.id === routes[0].teamId);
+  if (!team || (team.activeFrom && date < team.activeFrom) || (team.activeTo && date > team.activeTo)) return null;
+  return team.name;
 }
 
 function saveIssue(db, issue, sourceFile, runId, options = {}) {
@@ -882,7 +888,8 @@ function saveSprint(db, sprint, sourceFile, runId) {
   const id = sprint?.id === undefined ? '' : String(sprint.id);
   if (!id) return { status: 'skipped', reason: 'SPRINT_ID_MISSING' };
   const boardId = sprint.originBoardId === undefined ? null : String(sprint.originBoardId);
-  const teamRoute = routeForBoard(db, boardId);
+  const routeDate = Date.parse(sprint.completeDate || sprint.activatedDate || sprint.endDate || sprint.startDate || '') || Date.now();
+  const teamRoute = routeForBoard(db, boardId, routeDate);
   const existing = db.prepare('SELECT raw_json,source_file,imported_at,state FROM jira_sprints WHERE sprint_id=?').get(id);
   const rawJson = JSON.stringify(sprint);
   if (existing?.raw_json === rawJson) return { status: 'duplicate' };

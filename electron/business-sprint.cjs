@@ -1,5 +1,6 @@
 const { getConfig } = require('./database.cjs');
 const { resolveSemanticFields, semanticHistoryField } = require('./semantic-mapping.cjs');
+const { resolveBoardTeam, resolveTeamAttribution } = require('./team-attribution.cjs');
 
 function safeJson(value, fallback = null) {
   try { return JSON.parse(value); } catch { return fallback; }
@@ -94,25 +95,21 @@ function sprintBoundary(raw, nowMs = Date.now()) {
   return { startMs, endMs, startDate: raw.activatedDate || raw.startDate || '', endDate: raw.completeDate || raw.endDate || '' };
 }
 
-function routeMapFor(config) {
-  return new Map((config.boardRoutes || []).map((route) => [String(route.boardId), config.teams.find((team) => team.id === route.teamId)?.name || route.team || '']));
-}
-
 function listBusinessSprints(db) {
   const config = getConfig(db);
   if (!config.modules.businessSprint) return [];
-  const routes = routeMapFor(config);
   const now = Date.now();
   return db.prepare('SELECT sprint_id,board_id,team_route,state,start_date,end_date,activated_date,complete_date,raw_json FROM jira_sprints ORDER BY start_date DESC,sprint_id DESC')
     .all().map((row) => {
       const raw = safeJson(row.raw_json, {});
-      const teamRoute = routes.get(String(row.board_id)) || row.team_route || '';
       const boundary = sprintBoundary({ ...raw, id: row.sprint_id, state: row.state || raw.state,
         startDate: row.start_date || raw.startDate, endDate: row.end_date || raw.endDate,
         activatedDate: row.activated_date || raw.activatedDate, completeDate: row.complete_date || raw.completeDate }, now);
-      if (!boundary || !teamRoute) return null;
+      if (!boundary) return null;
+      const route = resolveBoardTeam(config, String(row.board_id || ''), boundary.endMs, row.team_route || '');
       return { id: String(row.sprint_id), name: String(raw.name || 'Sprint ' + row.sprint_id), boardId: String(row.board_id || ''),
-        teamRoute, state: String(row.state || raw.state || ''), startDate: boundary.startDate, endDate: boundary.endDate,
+        teamRoute: route.team?.name || '', teamRouteId: route.teamId, teamRouteStatus: route.status,
+        state: String(row.state || raw.state || ''), startDate: boundary.startDate, endDate: boundary.endDate,
         startAt: new Date(boundary.startMs).toISOString(), endAt: new Date(boundary.endMs).toISOString(),
         hasActualStart: Boolean(row.activated_date || raw.activatedDate), hasActualEnd: Boolean(row.complete_date || raw.completeDate) };
     }).filter(Boolean).sort((a, b) => Date.parse(b.startAt) - Date.parse(a.startAt) || a.id.localeCompare(b.id));
@@ -144,11 +141,24 @@ function makeIssueState(issue, sprintId, boundary, config) {
   });
   const createdMs = Date.parse(fields.created || '');
   const addedDuring = !committed && (entries.length > 0 || (Number.isFinite(createdMs) && createdMs > boundary.startMs && createdMs <= boundary.endMs && entryStatuses.has(normalize(endStatus))));
-  const teamValue = optionLabel(valueAt(semantic.team, events, 'team', committed ? boundary.startMs : entries[0]?.timeMs || boundary.startMs, optionLabel)).trim();
-  const matchingTeams = (config.teams || []).filter((team) => [team.name, ...(team.aliases || [])].some((label) => normalize(label) === normalize(teamValue)));
-  const routeTeam = routeMapFor(config).get(String(sprintId.boardId || '')) || sprintId.teamRoute || '';
-  const team = matchingTeams.length === 1 ? matchingTeams[0].name : routeTeam;
-  const teamSource = matchingTeams.length === 1 ? 'configured team field' : routeTeam ? 'board route' : 'unmapped';
+  const teamAttributionAt = committed ? boundary.startMs : entries[0]?.timeMs || boundary.startMs;
+  const teamValue = optionLabel(valueAt(semantic.team, events, 'team', teamAttributionAt, optionLabel)).trim();
+  const attribution = resolveTeamAttribution(issue, sprintId, config, teamValue, teamAttributionAt);
+  const team = attribution.team?.name || '';
+  const teamSource = attribution.source || 'unmapped';
+  const teamAttributionFindings = [];
+  if (attribution.fieldStatus === 'ambiguous') teamAttributionFindings.push({ code: 'TEAM_FIELD_AMBIGUOUS', message: 'The configured team field value matches multiple teams.' });
+  if (attribution.fieldStatus === 'unmapped') teamAttributionFindings.push({ code: 'TEAM_FIELD_UNMAPPED', message: 'The configured team field value does not match an active team.' });
+  if (attribution.fieldStatus === 'inactive') teamAttributionFindings.push({ code: 'TEAM_FIELD_INACTIVE', message: 'The configured team field value is outside the team active dates.' });
+  if (attribution.boardStatus === 'inactive') teamAttributionFindings.push({ code: 'BOARD_TEAM_INACTIVE', message: 'The board team route is outside its effective dates.' });
+  if (attribution.boardStatus === 'ambiguous') teamAttributionFindings.push({ code: 'BOARD_TEAM_AMBIGUOUS', message: 'Multiple active team routes match the sprint board.' });
+  if (attribution.componentStatus === 'ambiguous') teamAttributionFindings.push({ code: 'COMPONENT_TEAM_AMBIGUOUS', message: 'Issue components map to multiple active teams.' });
+  if (attribution.componentStatus === 'inactive') teamAttributionFindings.push({ code: 'COMPONENT_TEAM_INACTIVE', message: 'Issue component mappings are outside their effective dates.' });
+  if (attribution.projectStatus === 'ambiguous') teamAttributionFindings.push({ code: 'PROJECT_TEAM_AMBIGUOUS', message: 'The project maps to multiple active teams.' });
+  if (attribution.projectStatus === 'inactive') teamAttributionFindings.push({ code: 'PROJECT_TEAM_INACTIVE', message: 'The project team mapping is outside its effective dates.' });
+  if (attribution.issueOverrideStatus === 'inactive') teamAttributionFindings.push({ code: 'TEAM_OVERRIDE_INACTIVE', message: 'The issue team override is outside its effective dates.' });
+  if (attribution.conflicts.length) teamAttributionFindings.push({ code: 'TEAM_ATTRIBUTION_CONFLICT', message: `Active attribution sources disagree: ${attribution.conflicts.map((item) => `${item.source}: ${item.team}`).join(', ')}.` });
+  if (!team) teamAttributionFindings.push({ code: 'UNMAPPED_TEAM', message: 'No active team attribution source applies.' });
   const issueLinks = (fields.issuelinks || []).flatMap((link) => [link?.inwardIssue?.key, link?.outwardIssue?.key].filter(Boolean).map((key) => String(key).toUpperCase()));
   const boundaryHistoryComplete = issue.changelog?.historyComplete === undefined
     ? Number.isFinite(Number(issue.changelog?.total)) && Number(issue.changelog.total) <= (issue.changelog?.histories?.length || 0) + Number(issue.changelog?.startAt || 0)
@@ -157,7 +167,9 @@ function makeIssueState(issue, sprintId, boundary, config) {
   const completedInSprint = Boolean(statusCompletion || milestones.some((milestone) => milestoneAt[milestone.id]));
   return {
     key: String(issue.key || '').toUpperCase(), summary: String(fields.summary || ''), project: String(fields.project?.key || ''),
-    team, teamSource, startStatus, endStatus, startPoints: pointsAt(boundary.startMs), endPoints: pointsAt(boundary.endMs),
+    team, teamId: attribution.teamId, teamPath: attribution.teamPath, teamSource, teamValue,
+    teamAttributionFindings, teamAttributionConflicts: attribution.conflicts, startStatus, endStatus,
+    startPoints: pointsAt(boundary.startMs), endPoints: pointsAt(boundary.endMs),
     pointsDelta: pointsAt(boundary.startMs) !== null && pointsAt(boundary.endMs) !== null ? pointsAt(boundary.endMs) - pointsAt(boundary.startMs) : null,
     committed, addedDuring, addedPoints: addedDuring ? pointsAt(entries[0]?.timeMs || boundary.endMs) : null,
     inScopeAtEnd: insideAt(boundary.endMs) && entryStatuses.has(normalize(endStatus)),
@@ -171,8 +183,8 @@ function makeIssueState(issue, sprintId, boundary, config) {
   };
 }
 
-function emptyTeamStats(team, milestones) {
-  return { team, committedCount: 0, committedSP: 0, committedMissingSPCount: 0, addedCount: 0, addedSP: 0,
+function emptyTeamStats(team, milestones, teamId = '') {
+  return { team, teamId, committedCount: 0, committedSP: 0, committedMissingSPCount: 0, addedCount: 0, addedSP: 0,
     addedMissingSPCount: 0, inScopeAtEndCount: 0, completedCount: 0, completedSP: 0, exitCount: 0,
     pointIncreaseSP: 0, pointDecreaseSP: 0, milestones: Object.fromEntries(milestones.map((item) => [item.id, { label: item.label, count: 0, storyPoints: 0, missingStoryPoints: 0 }])) };
 }
@@ -189,16 +201,22 @@ function getBusinessSprintReport(db, filters = {}) {
     startDate: row.start_date || rawSprint.startDate, endDate: row.end_date || rawSprint.endDate,
     activatedDate: row.activated_date || rawSprint.activatedDate, completeDate: row.complete_date || rawSprint.completeDate });
   if (!boundary) throw new Error('This sprint has no valid start and end boundary.');
-  const routeTeam = routeMapFor(config).get(String(row.board_id)) || row.team_route || '';
+  const route = resolveBoardTeam(config, String(row.board_id || ''), boundary.endMs, row.team_route || '');
+  const routeTeam = route.team?.name || '';
   const sprint = { id: sprintId, boardId: String(row.board_id || ''), name: String(rawSprint.name || 'Sprint ' + sprintId), teamRoute: routeTeam,
+    teamRouteId: route.teamId, teamRouteStatus: route.status,
     state: String(row.state || rawSprint.state || ''), startAt: new Date(boundary.startMs).toISOString(), endAt: new Date(boundary.endMs).toISOString(),
     hasActualStart: Boolean(row.activated_date || rawSprint.activatedDate), hasActualEnd: Boolean(row.complete_date || rawSprint.completeDate) };
   const projects = config.projectRoles.commitments || [];
   const rows = db.prepare('SELECT raw_json FROM jira_issues WHERE project_key IN (' + projects.map(() => '?').join(',') + ') ORDER BY issue_key').all(...projects);
   const states = rows.map((item) => safeJson(item.raw_json, null)).filter(Boolean)
     .map((issue) => makeIssueState(issue, sprint, boundary, config)).filter(Boolean);
+  const attributionFindings = states.filter((state) => state.committed || state.addedDuring).flatMap((state) => state.teamAttributionFindings.map((finding) => ({
+    severity: finding.code === 'UNMAPPED_TEAM' || finding.code.endsWith('AMBIGUOUS') || finding.code.endsWith('CONFLICT') ? 'warning' : 'info',
+    code: finding.code, count: 1, issueKey: state.key, message: `${state.key}: ${finding.message}`,
+  })));
   const teamNames = Array.from(new Set([routeTeam, ...states.map((item) => item.team), ...(config.teams || []).map((team) => team.name)].filter(Boolean))).sort();
-  const teams = teamNames.map((team) => emptyTeamStats(team, config.workflows.commitment.milestones || []));
+  const teams = teamNames.map((team) => emptyTeamStats(team, config.workflows.commitment.milestones || [], config.teams.find((item) => item.name === team)?.id || ''));
   const byTeam = new Map(teams.map((team) => [team.team, team]));
   const items = [];
   const unmapped = [];
@@ -229,7 +247,7 @@ function getBusinessSprintReport(db, filters = {}) {
     count: unmapped.length, committedCount: unmapped.filter((item) => item.committed).length,
     addedCount: unmapped.filter((item) => item.addedDuring).length, missingSPCount: unmapped.filter((item) => item.committed ? item.startPoints === null : item.addedPoints === null).length,
     items: unmapped,
-  }, otherTeamCount: 0, coverage: {
+  }, attributionFindings, otherTeamCount: 0, coverage: {
     historyCompleteCount: states.filter((item) => item.historyComplete).length,
     historyIncompleteCount: states.filter((item) => !item.historyComplete).length,
     startUnverifiedCount: states.filter((item) => !item.startVerified && (item.committed || item.addedDuring)).length,

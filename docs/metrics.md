@@ -23,6 +23,12 @@ Semantic field coverage follows the project/type binding selected for each issue
 - Forecasts use the configured lookback and available completed sprint history. Coverage and fallback method are exposed with the result.
 - `timespent` history deltas are an estimate proxy, not Jira worklogs. Worklog detail is not inferred.
 
+## Team attribution
+
+Team precedence is shared by delivery and sprint-commitment reports: issue override, configured team field, board route, component assignment, project default. Team and rule active dates are inclusive UTC dates. Delivery evaluates the selected source at the sprint end; a commitment evaluates it when the issue enters the configured commitment state, or at sprint start when already committed. Report rows carry stable team IDs and hierarchy paths beside display names.
+
+Unknown, inactive, ambiguous, and conflicting mappings generate distinct quality findings. An issue-sprint relationship without an active team stays in universal issue and relationship counts. Team-only totals exclude it and display the number and detail of excluded relationships. Portfolio Epic team subtotals count distinct child issue keys with attributed sprint history; because team attribution can change over time, one child may occur in multiple team subtotals. Epic-wide child counts remain unique.
+
 ## Capacity and calendar
 
 Working days use the configured time zone, working weekdays, and holidays. Capacity can be overridden by team, sprint, person, working days, and allocation. Story points and hours remain separate measures. The current model does not claim support for every effective-dated allocation or cross-time-zone schedule edge case; see the acceptance record.

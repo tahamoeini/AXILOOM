@@ -19,6 +19,7 @@ export interface Snapshot {
     sprintCount: number;
     reportableSprints: number;
     relationCount: number;
+    unmappedTeamRelationCount: number;
     warningCount: number;
     issuesWithoutAssignee: number;
     lastIssueUpdate: string | null;
@@ -106,12 +107,14 @@ export interface BusinessBoardReport {
 
 export interface BusinessSprintOption {
   id: string; name: string; boardId: string; teamRoute: string; state: string;
+  teamRouteId: string; teamRouteStatus: string;
   startDate: string; endDate: string; startAt: string; endAt: string;
   hasActualStart: boolean; hasActualEnd: boolean;
 }
 
 export interface BusinessSprintTeamReport {
   team: string;
+  teamId: string;
   committedCount: number; committedSP: number; committedMissingSPCount: number;
   addedCount: number; addedSP: number; addedMissingSPCount: number;
   inScopeAtEndCount: number; completedCount: number; completedSP: number; exitCount: number;
@@ -125,6 +128,7 @@ export interface BusinessSprintReport {
   teams: BusinessSprintTeamReport[];
   items: Array<Record<string, any>>;
   unmapped: { count: number; committedCount: number; addedCount: number; missingSPCount: number; items: Array<Record<string, any>> };
+  attributionFindings: Array<{ severity: string; code: string; count: number; issueKey: string; message: string }>;
   otherTeamCount: number;
   coverage: { historyCompleteCount: number; historyIncompleteCount: number; startUnverifiedCount: number; endUnverifiedCount: number };
 }
@@ -133,6 +137,8 @@ export interface JiraRoute {
   boardId: string;
   teamId: string;
   team?: string;
+  activeFrom: string;
+  activeTo: string;
 }
 
 export interface CapacityOverride {
@@ -173,8 +179,13 @@ export interface AppConfig {
   jiraUrl: string;
   projects: string[];
   projectRoles: Record<string, string[]>;
-  teams: Array<{ id: string; name: string; aliases: string[]; activeFrom: string; activeTo: string }>;
+  teams: Array<{ id: string; name: string; aliases: string[]; parentTeamId: string; activeFrom: string; activeTo: string }>;
   boardRoutes: JiraRoute[];
+  teamAssignments: {
+    projects: Array<{ projectKey: string; teamId: string; activeFrom: string; activeTo: string }>;
+    components: Array<{ projectKey: string; componentId: string; componentName: string; teamId: string; activeFrom: string; activeTo: string }>;
+    issueOverrides: Array<{ issueKey: string; teamId: string; activeFrom: string; activeTo: string }>;
+  };
   fieldMappings: Array<{ semanticKey: string; providerFieldId: string; providerFieldName: string; projectKey: string; issueTypeId: string; transform: string }>;
   workClassifications: Array<{ id: string; label: string; aliases: string[]; minimumShare: number | null; maximumShare: number | null }>;
   issueTypeClassifications: Array<{ issueTypeId: string; classification: string }>;

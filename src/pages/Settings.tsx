@@ -227,9 +227,24 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     catch (error) { notify({ tone: 'error', text: error instanceof Error ? error.message : 'Restore failed.' }); }
     finally { setWorking(''); }
   };
-  const addTeam = () => update('teams', [...draft.teams, { id: `team-${crypto.randomUUID().slice(0, 8)}`, name: '', aliases: [], activeFrom: '', activeTo: '' }]);
+  const addTeam = () => update('teams', [...draft.teams, { id: `team-${crypto.randomUUID().slice(0, 8)}`, name: '', aliases: [], parentTeamId: '', activeFrom: '', activeTo: '' }]);
   const updateTeam = (index: number, patch: Partial<AppConfig['teams'][number]>) => update('teams', draft.teams.map((team, current) => current === index ? { ...team, ...patch } : team));
-  const addRoute = () => update('boardRoutes', [...draft.boardRoutes, { boardId: '', teamId: draft.teams[0]?.id || '' }]);
+  const addTeamAssignment = (scope: 'projects' | 'components' | 'issueOverrides') => {
+    if (scope === 'projects') update('teamAssignments', { ...draft.teamAssignments, projects: [...draft.teamAssignments.projects, { projectKey: '', teamId: '', activeFrom: '', activeTo: '' }] });
+    if (scope === 'components') update('teamAssignments', { ...draft.teamAssignments, components: [...draft.teamAssignments.components, { projectKey: '', componentId: '', componentName: '', teamId: '', activeFrom: '', activeTo: '' }] });
+    if (scope === 'issueOverrides') update('teamAssignments', { ...draft.teamAssignments, issueOverrides: [...draft.teamAssignments.issueOverrides, { issueKey: '', teamId: '', activeFrom: '', activeTo: '' }] });
+  };
+  const updateTeamAssignment = (scope: 'projects' | 'components' | 'issueOverrides', index: number, patch: Record<string, string>) => {
+    if (scope === 'projects') update('teamAssignments', { ...draft.teamAssignments, projects: draft.teamAssignments.projects.map((item, current) => current === index ? { ...item, ...patch } : item) });
+    if (scope === 'components') update('teamAssignments', { ...draft.teamAssignments, components: draft.teamAssignments.components.map((item, current) => current === index ? { ...item, ...patch } : item) });
+    if (scope === 'issueOverrides') update('teamAssignments', { ...draft.teamAssignments, issueOverrides: draft.teamAssignments.issueOverrides.map((item, current) => current === index ? { ...item, ...patch } : item) });
+  };
+  const removeTeamAssignment = (scope: 'projects' | 'components' | 'issueOverrides', index: number) => {
+    if (scope === 'projects') update('teamAssignments', { ...draft.teamAssignments, projects: draft.teamAssignments.projects.filter((_, current) => current !== index) });
+    if (scope === 'components') update('teamAssignments', { ...draft.teamAssignments, components: draft.teamAssignments.components.filter((_, current) => current !== index) });
+    if (scope === 'issueOverrides') update('teamAssignments', { ...draft.teamAssignments, issueOverrides: draft.teamAssignments.issueOverrides.filter((_, current) => current !== index) });
+  };
+  const addRoute = () => update('boardRoutes', [...draft.boardRoutes, { boardId: '', teamId: draft.teams[0]?.id || '', activeFrom: '', activeTo: '' }]);
   const addMapping = (semanticKey: string) => {
     if (draft.fieldMappings.some((item) => item.semanticKey === semanticKey && !item.projectKey && !item.issueTypeId)) return;
     const semantic = semanticFields.find((item) => item.key === semanticKey)!;
@@ -298,10 +313,53 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     </section>
 
     <section className="panel settings-panel">
-      <SectionHeading title="Teams and boards" hint="Teams use stable local IDs. A board route assigns a sprint to one configured team." />
-      <div className="team-list">{draft.teams.map((team, index) => <div className="team-row" key={team.id}><label className="form-field"><span>Stable ID</span><input value={team.id} onChange={(event) => updateTeam(index, { id: event.target.value })} /></label><label className="form-field"><span>Team name</span><input value={team.name} onChange={(event) => updateTeam(index, { name: event.target.value })} /></label><label className="form-field"><span>Aliases</span><input value={team.aliases.join(', ')} onChange={(event) => updateTeam(index, { aliases: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label><button className="icon-button" aria-label={`Remove team ${team.name || team.id}`} onClick={() => update('teams', draft.teams.filter((_, current) => current !== index))}><Trash2 size={15} /></button></div>)}
+      <SectionHeading title="Teams and attribution" hint="Stable team IDs support hierarchy and effective dates. Precedence: issue override, team field, board, component, then project. Conflicts and exclusions stay visible." />
+      <h3>Organization teams</h3>
+      <div className="team-list">{draft.teams.map((team, index) => <div className="team-row team-registry-row" key={team.id}>
+        <label className="form-field"><span>Stable ID</span><input value={team.id} onChange={(event) => updateTeam(index, { id: event.target.value })} /></label>
+        <label className="form-field"><span>Team name</span><input value={team.name} onChange={(event) => updateTeam(index, { name: event.target.value })} /></label>
+        <label className="form-field"><span>Aliases</span><input value={team.aliases.join(', ')} onChange={(event) => updateTeam(index, { aliases: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label>
+        <label className="form-field"><span>Parent team</span><select value={team.parentTeamId} onChange={(event) => updateTeam(index, { parentTeamId: event.target.value })}><option value="">No parent</option>{draft.teams.filter((candidate) => candidate.id !== team.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name || candidate.id}</option>)}</select></label>
+        <label className="form-field"><span>Active from (UTC)</span><input type="date" value={team.activeFrom} onChange={(event) => updateTeam(index, { activeFrom: event.target.value })} /></label>
+        <label className="form-field"><span>Active through (UTC)</span><input type="date" value={team.activeTo} onChange={(event) => updateTeam(index, { activeTo: event.target.value })} /></label>
+        <button className="icon-button" aria-label={`Remove team ${team.name || team.id}`} onClick={() => update('teams', draft.teams.filter((_, current) => current !== index))}><Trash2 size={15} /></button>
+      </div>)}
         <button className="button secondary" onClick={addTeam}><Plus size={14} /> Add team</button></div>
-      <div className="route-list">{draft.boardRoutes.map((route, index) => <div className="team-row" key={`${index}-${route.boardId}`}><label className="form-field"><span>Board ID</span><input value={route.boardId} onChange={(event) => update('boardRoutes', draft.boardRoutes.map((item, current) => current === index ? { ...item, boardId: event.target.value } : item))} /></label><label className="form-field"><span>Team</span><select value={route.teamId} onChange={(event) => update('boardRoutes', draft.boardRoutes.map((item, current) => current === index ? { ...item, teamId: event.target.value } : item))}><option value="">Select team</option>{draft.teams.map((team) => <option key={team.id} value={team.id}>{team.name || team.id}</option>)}</select></label><button className="icon-button" aria-label="Remove board route" onClick={() => update('boardRoutes', draft.boardRoutes.filter((_, current) => current !== index))}><Trash2 size={15} /></button></div>)}<button className="button secondary" onClick={addRoute} disabled={!draft.teams.length}><Plus size={14} /> Map a board</button></div>
+      <h3>Project team defaults</h3>
+      <p className="field-hint">Used when issue and sprint level sources do not identify a team. Effective dates are inclusive UTC dates.</p>
+      <div className="team-list">{draft.teamAssignments.projects.map((item, index) => <div className="team-row assignment-row" key={`${item.projectKey}-${index}`}>
+        <label className="form-field"><span>Project</span><select value={item.projectKey} onChange={(event) => updateTeamAssignment('projects', index, { projectKey: event.target.value })}><option value="">Select project</option>{draft.projects.map((project) => <option key={project}>{project}</option>)}</select></label>
+        <label className="form-field"><span>Team</span><select value={item.teamId} onChange={(event) => updateTeamAssignment('projects', index, { teamId: event.target.value })}><option value="">Select team</option>{draft.teams.map((team) => <option key={team.id} value={team.id}>{team.name || team.id}</option>)}</select></label>
+        <label className="form-field"><span>Effective from (UTC)</span><input type="date" value={item.activeFrom} onChange={(event) => updateTeamAssignment('projects', index, { activeFrom: event.target.value })} /></label>
+        <label className="form-field"><span>Effective through (UTC)</span><input type="date" value={item.activeTo} onChange={(event) => updateTeamAssignment('projects', index, { activeTo: event.target.value })} /></label>
+        <button className="icon-button" aria-label="Remove project team mapping" onClick={() => removeTeamAssignment('projects', index)}><Trash2 size={15} /></button>
+      </div>)}<button className="button secondary" onClick={() => addTeamAssignment('projects')} disabled={!draft.projects.length || !draft.teams.length}><Plus size={14} /> Map project default</button></div>
+      <h3>Component team mappings</h3>
+      <div className="team-list">{draft.teamAssignments.components.map((item, index) => <div className="team-row assignment-component-row" key={`${item.projectKey}-${item.componentId}-${index}`}>
+        <label className="form-field"><span>Project</span><select value={item.projectKey} onChange={(event) => updateTeamAssignment('components', index, { projectKey: event.target.value })}><option value="">Select project</option>{draft.projects.map((project) => <option key={project}>{project}</option>)}</select></label>
+        <label className="form-field"><span>Component ID (optional)</span><input value={item.componentId} onChange={(event) => updateTeamAssignment('components', index, { componentId: event.target.value })} /></label>
+        <label className="form-field"><span>Component name</span><input value={item.componentName} onChange={(event) => updateTeamAssignment('components', index, { componentName: event.target.value })} /></label>
+        <label className="form-field"><span>Team</span><select value={item.teamId} onChange={(event) => updateTeamAssignment('components', index, { teamId: event.target.value })}><option value="">Select team</option>{draft.teams.map((team) => <option key={team.id} value={team.id}>{team.name || team.id}</option>)}</select></label>
+        <label className="form-field"><span>Effective from (UTC)</span><input type="date" value={item.activeFrom} onChange={(event) => updateTeamAssignment('components', index, { activeFrom: event.target.value })} /></label>
+        <label className="form-field"><span>Effective through (UTC)</span><input type="date" value={item.activeTo} onChange={(event) => updateTeamAssignment('components', index, { activeTo: event.target.value })} /></label>
+        <button className="icon-button" aria-label="Remove component team mapping" onClick={() => removeTeamAssignment('components', index)}><Trash2 size={15} /></button>
+      </div>)}<button className="button secondary" onClick={() => addTeamAssignment('components')} disabled={!draft.projects.length || !draft.teams.length}><Plus size={14} /> Map component</button></div>
+      <h3>Explicit issue overrides</h3>
+      <p className="field-hint">Use for reviewed, issue-specific exceptions. Configuration revisions retain the change history.</p>
+      <div className="team-list">{draft.teamAssignments.issueOverrides.map((item, index) => <div className="team-row assignment-row" key={`${item.issueKey}-${index}`}>
+        <label className="form-field"><span>Issue key</span><input value={item.issueKey} onChange={(event) => updateTeamAssignment('issueOverrides', index, { issueKey: event.target.value.toUpperCase() })} placeholder="PROJECT-123" /></label>
+        <label className="form-field"><span>Team</span><select value={item.teamId} onChange={(event) => updateTeamAssignment('issueOverrides', index, { teamId: event.target.value })}><option value="">Select team</option>{draft.teams.map((team) => <option key={team.id} value={team.id}>{team.name || team.id}</option>)}</select></label>
+        <label className="form-field"><span>Effective from (UTC)</span><input type="date" value={item.activeFrom} onChange={(event) => updateTeamAssignment('issueOverrides', index, { activeFrom: event.target.value })} /></label>
+        <label className="form-field"><span>Effective through (UTC)</span><input type="date" value={item.activeTo} onChange={(event) => updateTeamAssignment('issueOverrides', index, { activeTo: event.target.value })} /></label>
+        <button className="icon-button" aria-label="Remove issue team override" onClick={() => removeTeamAssignment('issueOverrides', index)}><Trash2 size={15} /></button>
+      </div>)}<button className="button secondary" onClick={() => addTeamAssignment('issueOverrides')} disabled={!draft.teams.length}><Plus size={14} /> Add issue override</button></div>
+      <div className="route-list">{draft.boardRoutes.map((route, index) => <div className="team-row board-route-row" key={`${index}-${route.boardId}-${route.activeFrom}`}>
+        <label className="form-field"><span>Board ID</span><input value={route.boardId} onChange={(event) => update('boardRoutes', draft.boardRoutes.map((item, current) => current === index ? { ...item, boardId: event.target.value } : item))} /></label>
+        <label className="form-field"><span>Team</span><select value={route.teamId} onChange={(event) => update('boardRoutes', draft.boardRoutes.map((item, current) => current === index ? { ...item, teamId: event.target.value } : item))}><option value="">Select team</option>{draft.teams.map((team) => <option key={team.id} value={team.id}>{team.name || team.id}</option>)}</select></label>
+        <label className="form-field"><span>Effective from (UTC)</span><input type="date" value={route.activeFrom} onChange={(event) => update('boardRoutes', draft.boardRoutes.map((item, current) => current === index ? { ...item, activeFrom: event.target.value } : item))} /></label>
+        <label className="form-field"><span>Effective through (UTC)</span><input type="date" value={route.activeTo} onChange={(event) => update('boardRoutes', draft.boardRoutes.map((item, current) => current === index ? { ...item, activeTo: event.target.value } : item))} /></label>
+        <button className="icon-button" aria-label="Remove board route" onClick={() => update('boardRoutes', draft.boardRoutes.filter((_, current) => current !== index))}><Trash2 size={15} /></button>
+      </div>)}<button className="button secondary" onClick={addRoute} disabled={!draft.teams.length}><Plus size={14} /> Map a board</button></div>
     </section>
 
     <section className="panel settings-panel">

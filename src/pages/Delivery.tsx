@@ -12,10 +12,10 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
 function exportReport(snapshot: Snapshot, rows: Array<Record<string, any>>, mode: Mode, summaryOnly = false): ExportReport {
   const metadata = mode === 'sprints'
-    ? ['team', 'sprintId', 'sprintName', 'state', 'sprintOrder', 'startDate', 'endDate', 'calendarDays', 'workingDays']
-    : ['team', 'assigneeKey', 'assignee', 'sprintId', 'sprintName', 'sprintOrder', 'startDate', 'endDate', 'calendarDays', 'workingDays'];
+    ? ['teamId', 'team', 'teamPath', 'sprintId', 'sprintName', 'state', 'sprintOrder', 'startDate', 'endDate', 'calendarDays', 'workingDays']
+    : ['teamId', 'team', 'teamPath', 'assigneeKey', 'assignee', 'sprintId', 'sprintName', 'sprintOrder', 'startDate', 'endDate', 'calendarDays', 'workingDays'];
   const labels: Record<string, string> = {
-    team: 'تیم', sprintId: 'Sprint ID', sprintName: 'Sprint', state: 'وضعیت', sprintOrder: 'ترتیب Sprint',
+    teamId: 'شناسهٔ تیم', team: 'تیم', teamPath: 'مسیر سلسله‌مراتب تیم', sprintId: 'Sprint ID', sprintName: 'Sprint', state: 'وضعیت', sprintOrder: 'ترتیب Sprint',
     startDate: 'شروع', endDate: 'پایان', calendarDays: 'روز تقویمی', workingDays: 'روز کاری',
     assigneeKey: 'شناسهٔ فرد', assignee: 'فرد',
   };
@@ -27,6 +27,7 @@ function exportReport(snapshot: Snapshot, rows: Array<Record<string, any>>, mode
   const formatHeader = (key: string) => labels[key] || key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2');
   const valueFor = (row: Record<string, any>, key: string) => {
     const value = row[key];
+    if (key === 'teamPath' && Array.isArray(value)) return value.join(' / ');
     return value === undefined || value === null || (typeof value === 'number' && !Number.isFinite(value)) ? '' : value;
   };
   const reportRows = rows.map((row) => [...metadata.map((key) => valueFor(row, key)), ...metricKeys.map((key) => valueFor(row, key))]);
@@ -39,12 +40,13 @@ function exportReport(snapshot: Snapshot, rows: Array<Record<string, any>>, mode
     [], ['شواهد تاریخی', 'تعداد'],
     ['Issue revisions', snapshot.quality.evidence.issueRevisions], ['Changelog events', snapshot.quality.evidence.issueHistoryEvents],
     ['Sprint revisions', snapshot.quality.evidence.sprintRevisions], ['Local link events', snapshot.quality.evidence.localLinkEvents],
+    ['Issue-sprint relationships without team attribution', snapshot.summary.unmappedTeamRelationCount],
   ] };
   const title = mode === 'sprints' ? 'تحویل اسپرینت و تیم' : 'تحلیل تیم و فرد';
   return {
     fileName: `Axiloom-${mode === 'sprints' ? 'delivery' : 'people'}${summaryOnly ? '-summary' : ''}`,
     title: summaryOnly ? `${title} · خلاصه` : title,
-    subtitle: `${formatNumber(snapshot.summary.issueCount, 0)} issue محلی · XLSX شامل ${formatNumber(metricKeys.length, 0)} ستون متریک است. ساعات از delta تاریخچهٔ timespent به‌دست می‌آیند و worklog دقیق نیست.`,
+    subtitle: `${formatNumber(snapshot.summary.issueCount, 0)} issue محلی · ${formatNumber(snapshot.summary.unmappedTeamRelationCount, 0)} رابطهٔ issue-sprint بدون تیم از جمع‌های تیمی کنار گذاشته شده · XLSX شامل ${formatNumber(metricKeys.length, 0)} ستون متریک است. ساعات از delta تاریخچهٔ timespent به‌دست می‌آیند و worklog دقیق نیست.`,
     sheets: summaryOnly ? [dataSheet] : [dataSheet, qualitySheet],
   };
 }
@@ -96,6 +98,7 @@ export default function Delivery({ snapshot, openSprint }: { snapshot: Snapshot;
     </section>
 
     {from && to && from > to && <p className="form-error">تاریخ پایان باید پس از تاریخ شروع باشد.</p>}
+    {snapshot.summary.unmappedTeamRelationCount > 0 && <div className="callout warning compact-callout"><span>{formatNumber(snapshot.summary.unmappedTeamRelationCount, 0)} رابطهٔ issue-sprint به‌دلیل نبود تخصیص معتبر از جمع‌های تیمی کنار گذاشته شده است. جزئیات را در کیفیت داده بررسی کنید.</span></div>}
     <div className="subtabs">
       <button className={mode === 'sprints' ? 'active' : ''} onClick={() => setMode('sprints')}><LineChart size={15} /> تیم و اسپرینت</button>
       <button className={mode === 'people' ? 'active' : ''} onClick={() => setMode('people')}><UsersRound size={15} /> تحلیل فردی</button>
@@ -116,7 +119,7 @@ export default function Delivery({ snapshot, openSprint }: { snapshot: Snapshot;
 
     <section className="panel table-panel">
       <SectionHeading title={mode === 'sprints' ? 'تحویل در سطح اسپرینت' : 'بار و جریان هر فرد'} hint={mode === 'people' ? 'آخرین assignee Jira برای تخصیص issue استفاده شده است؛ شاخص‌ها برای coaching و تشخیص گلوگاه‌اند.' : 'تخصیص تیم در مرز Sprint از نگاشت‌های فعال بازسازی می‌شود؛ موارد مبهم یا بدون نگاشت در کیفیت داده باقی می‌مانند.'} />
-      {mode === 'sprints' ? <DataTable headers={['تیم', 'اسپرینت', 'وضعیت', 'Scope', 'Planned SP', 'Ad hoc SP', 'تحویل SP', 'Scope اضافه / حذف', 'Carryover', 'Logged h', 'ظرفیت h', 'مصرف', 'زمان چرخه', 'بازگشایی', 'Forecast', 'کیفیت داده']} rows={sprintRows.map((row) => [<b className="team-name">{row.team}</b>, <button className="sprint-detail-link table-sprint-link" onClick={() => openSprint(String(row.sprintId))}>{row.sprintName}<small>#{row.sprintId} · جزئیات و تاریخچه</small></button>, <StatusBadge value={row.state} />, `${formatNumber(row.scopeIssues, 0)} / ${formatNumber(row.scopeSP)}`, formatNumber(row.plannedSP), formatNumber(row.adhocSP), formatNumber(row.completedSP), `${formatNumber(row.scopeAddedSP)} / ${formatNumber(row.scopeRemovedSP)}`, `${formatNumber(row.outgoingCarryoverIssues, 0)} · ${formatPercent(row.carryoverRateSP)}`, formatNumber(row.loggedHours), formatNumber(row.capacityHours), formatPercent(row.utilization), row.medianCycleTimeDays === null ? '—' : `${formatNumber(row.medianCycleTimeDays)} روز`, formatPercent(row.reopenedIssueRate), <span>{formatNumber(row.forecastPlannableSP)} SP <small className="table-sub">{row.forecastConfidence || '—'}</small></span>, <span>{formatPercent(row.storyPointCoverage)} SP <small className="table-sub">{formatPercent(row.timeDataCoverage)} زمان</small></span>])} empty="هنوز اسپرینت قابل گزارش نیست. مسیر board را در تنظیمات به تیم وصل کنید." /> : <DataTable headers={['تیم', 'فرد', 'Sprint', 'کار', 'SP تخصیص', 'تکمیل', 'SP تحویل', 'Planned / Ad hoc', 'Carryover', 'Logged h', 'ظرفیت h', 'مصرف ظرفیت', 'زمان چرخه', 'دقت تخمین', 'پوشش']} rows={personRows.map((row) => [<b className="team-name">{row.team}</b>, <span className="person-cell"><b>{row.assignee}</b><small>{row.assigneeKey || 'شناسه در دسترس نیست'}</small></span>, <button className="sprint-detail-link table-sprint-link" onClick={() => openSprint(String(row.sprintId))}>{row.sprintName}<small>#{row.sprintId} · جزئیات و تاریخچه</small></button>, formatNumber(row.assignedIssues, 0), formatNumber(row.assignedSP), formatNumber(row.completedIssues, 0), formatNumber(row.completedSP), `${formatNumber(row.plannedIssues, 0)} / ${formatNumber(row.adhocIssues, 0)}`, formatNumber(row.outgoingCarryoverIssues, 0), formatNumber(row.loggedHours), formatNumber(row.capacityHours), formatPercent(row.utilization), row.medianCycleTimeDays === null ? '—' : `${formatNumber(row.medianCycleTimeDays)} روز`, formatPercent(row.estimateAccuracy), `${formatPercent(row.storyPointCoverage)} / ${formatPercent(row.timeDataCoverage)}`])} empty="پس از ورود changelog و تخصیص‌های Jira، تحلیل فردی نمایش داده می‌شود." />}
+      {mode === 'sprints' ? <DataTable headers={['تیم', 'اسپرینت', 'وضعیت', 'Scope', 'Planned SP', 'Ad hoc SP', 'تحویل SP', 'Scope اضافه / حذف', 'Carryover', 'Logged h', 'ظرفیت h', 'مصرف', 'زمان چرخه', 'بازگشایی', 'Forecast', 'کیفیت داده']} rows={sprintRows.map((row) => [<b className="team-name">{row.team}</b>, <button className="sprint-detail-link table-sprint-link" onClick={() => openSprint(String(row.sprintId))}>{row.sprintName}<small>#{row.sprintId} · جزئیات و تاریخچه</small></button>, <StatusBadge value={row.state} />, `${formatNumber(row.scopeIssues, 0)} / ${formatNumber(row.scopeSP)}`, formatNumber(row.plannedSP), formatNumber(row.adhocSP), formatNumber(row.completedSP), `${formatNumber(row.scopeAddedSP)} / ${formatNumber(row.scopeRemovedSP)}`, `${formatNumber(row.outgoingCarryoverIssues, 0)} · ${formatPercent(row.carryoverRateSP)}`, formatNumber(row.loggedHours), formatNumber(row.capacityHours), formatPercent(row.utilization), row.medianCycleTimeDays === null ? '—' : `${formatNumber(row.medianCycleTimeDays)} روز`, formatPercent(row.reopenedIssueRate), <span>{formatNumber(row.forecastPlannableSP)} SP <small className="table-sub">{row.forecastConfidence || '—'}</small></span>, <span>{formatPercent(row.storyPointCoverage)} SP <small className="table-sub">{formatPercent(row.timeDataCoverage)} زمان</small></span>])} empty="اسپرینت با نگاشت تیم از مسیر board، component، project یا override قابل گزارش می‌شود." /> : <DataTable headers={['تیم', 'فرد', 'Sprint', 'کار', 'SP تخصیص', 'تکمیل', 'SP تحویل', 'Planned / Ad hoc', 'Carryover', 'Logged h', 'ظرفیت h', 'مصرف ظرفیت', 'زمان چرخه', 'دقت تخمین', 'پوشش']} rows={personRows.map((row) => [<b className="team-name">{row.team}</b>, <span className="person-cell"><b>{row.assignee}</b><small>{row.assigneeKey || 'شناسه در دسترس نیست'}</small></span>, <button className="sprint-detail-link table-sprint-link" onClick={() => openSprint(String(row.sprintId))}>{row.sprintName}<small>#{row.sprintId} · جزئیات و تاریخچه</small></button>, formatNumber(row.assignedIssues, 0), formatNumber(row.assignedSP), formatNumber(row.completedIssues, 0), formatNumber(row.completedSP), `${formatNumber(row.plannedIssues, 0)} / ${formatNumber(row.adhocIssues, 0)}`, formatNumber(row.outgoingCarryoverIssues, 0), formatNumber(row.loggedHours), formatNumber(row.capacityHours), formatPercent(row.utilization), row.medianCycleTimeDays === null ? '—' : `${formatNumber(row.medianCycleTimeDays)} روز`, formatPercent(row.estimateAccuracy), `${formatPercent(row.storyPointCoverage)} / ${formatPercent(row.timeDataCoverage)}`])} empty="پس از ورود changelog و تخصیص‌های Jira، تحلیل فردی نمایش داده می‌شود." />}
     </section>
     <div className="callout info"><Info size={16} /><span><b>تعریف ساعت:</b> timespent از deltaهای changelog برآورد می‌شود و worklog دقیق نیست. ظرفیت از تاریخ برنامه‌ریزی‌شدهٔ sprint، روزهای کاری دوشنبه تا جمعه و {formatNumber(8, 0)} ساعت در روز محاسبه می‌شود؛ تعطیلات رسمی در این نسخه حذف نمی‌شوند.</span></div>
   </>;

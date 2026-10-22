@@ -22,6 +22,7 @@
           projectRoles: { productIntake: [], technicalDelivery: [], commitments: [] },
           teams: [],
           boardRoutes: [],
+          teamAssignments: { projects: [], components: [], issueOverrides: [] },
           fieldMappings: [],
           workClassifications: [],
           issueTypeClassifications: [],
@@ -59,7 +60,7 @@
         const snapshot = {
           summary: {
             issueCount: 0, projectCounts: [], epicCount: 0, sprintCount: 0, reportableSprints: 0,
-            relationCount: 0, warningCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null,
+            relationCount: 0, unmappedTeamRelationCount: 0, warningCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null,
             openActions: 0, openRequests: 0, decisions: 0, outcomes: 0,
           },
           teams: [], projects: [], sprintMetrics: [], people: [], issues: [], issueTotal: 0,
@@ -89,6 +90,7 @@
               { id: 'customfield_7601', name: 'Estimate', schema: { type: 'number' } },
               { id: 'customfield_7602', name: 'Initiative Link', schema: { type: 'string' } },
               { id: 'customfield_7603', name: 'Delivery Team', schema: { type: 'option' } },
+              { id: 'customfield_7604', name: 'Sprint', schema: { type: 'array', items: 'string' } },
             ], updatedAt: 'synthetic fixture' },
             issueTypes: { value: [{ id: '101', name: 'Story' }, { id: '102', name: 'Task' }], updatedAt: 'synthetic fixture' },
             warnings: [],
@@ -117,8 +119,19 @@
             };
             importedProfile.projects = ['ALPHA'];
             importedProfile.projectRoles = { productIntake: [], technicalDelivery: ['ALPHA'], commitments: [] };
+            importedProfile.teams = [
+              { id: 'division-synthetic', name: 'Synthetic Division', aliases: [], parentTeamId: '', activeFrom: '', activeTo: '' },
+              { id: 'team-alpha', name: 'Alpha Delivery', aliases: ['Alpha Team'], parentTeamId: 'division-synthetic', activeFrom: '2026-01-01', activeTo: '2026-12-31' },
+            ];
+            importedProfile.boardRoutes = [{ boardId: '77', teamId: 'team-alpha', team: 'Alpha Delivery', activeFrom: '2026-01-01', activeTo: '2026-06-30' }];
+            importedProfile.teamAssignments = {
+              projects: [{ projectKey: 'ALPHA', teamId: 'team-alpha', activeFrom: '2026-01-01', activeTo: '2026-12-31' }],
+              components: [{ projectKey: 'ALPHA', componentId: '88', componentName: 'Synthetic Component', teamId: 'team-alpha', activeFrom: '', activeTo: '' }],
+              issueOverrides: [{ issueKey: 'ALPHA-123', teamId: 'team-alpha', activeFrom: '2026-03-01', activeTo: '2026-06-30' }],
+            };
             importedProfile.fieldMappings = [
               { semanticKey: 'storyPoints', providerFieldId: 'customfield_7601', providerFieldName: 'Estimate', projectKey: 'ALPHA', issueTypeId: '101', transform: 'number' },
+              { semanticKey: 'sprint', providerFieldId: 'customfield_7604', providerFieldName: 'Sprint', projectKey: 'ALPHA', issueTypeId: '', transform: 'id-list' },
               { semanticKey: 'team', providerFieldId: 'customfield_7603', providerFieldName: 'Delivery Team', projectKey: 'ALPHA', issueTypeId: '', transform: 'option-label' },
             ];
             importedProfile.hasSavedPat = true;

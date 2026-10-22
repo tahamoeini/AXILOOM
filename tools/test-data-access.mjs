@@ -10,10 +10,11 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const database = require('../electron/database.cjs');
-const { calculateMetrics, compactMetricsForCache } = require('../electron/metrics.cjs');
+const { calculateMetrics, compactMetricsForCache, publicSnapshot } = require('../electron/metrics.cjs');
+const { getBusinessSprintReport, listBusinessSprints } = require('../electron/business-sprint.cjs');
 const { getBusinessBoardReport, getCalendarPeriodReport, getDataGeneration, getIssueActivity, getIssueFilterOptions,
   getIssueOverviewStats, getMetricsGeneration, getCachedMetrics, getConfig, listIssues, openDatabase, saveConfig,
-  saveIssue, saveLocalIssueLink } = database;
+  saveIssue, saveLocalIssueLink, saveSprint } = database;
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'axiloom-data-access-'));
 const dbPath = path.join(temporaryDirectory, 'workspace.sqlite');
@@ -145,7 +146,10 @@ async function main() {
   const sprints = db.prepare('SELECT raw_json FROM jira_sprints ORDER BY start_date').all().map((row) => JSON.parse(row.raw_json));
   const directMetrics = calculateMetrics(rawIssues, sprints, getConfig(db));
   const engineHash = createHash('sha256').update(fs.readFileSync(path.join(root, 'electron/snapshot.cjs')))
-    .update(fs.readFileSync(path.join(root, 'electron/metrics.cjs'))).update(fs.readFileSync(path.join(root, 'electron/database.cjs'))).digest('hex');
+    .update(fs.readFileSync(path.join(root, 'electron/metrics.cjs')))
+    .update(fs.readFileSync(path.join(root, 'electron/semantic-mapping.cjs')))
+    .update(fs.readFileSync(path.join(root, 'electron/team-attribution.cjs')))
+    .update(fs.readFileSync(path.join(root, 'electron/database.cjs'))).digest('hex');
   const configHash = createHash('sha256').update(JSON.stringify(getConfig(db))).digest('hex');
   const cachedMetrics = getCachedMetrics(db, getMetricsGeneration(db), new Date().toISOString().slice(0, 10), engineHash, configHash);
   assert.ok(cachedMetrics, 'worker must persist the versioned metrics cache');
@@ -226,6 +230,7 @@ async function main() {
     fieldMappings: [
       ...alternateConfig.fieldMappings.filter((mapping) => mapping.semanticKey !== 'sprint'),
       { semanticKey: 'sprint', providerFieldId: 'customfield_sprints', projectKey: 'ENGINEERING', transform: 'id-list' },
+      { semanticKey: 'sprint', providerFieldId: 'customfield_sprints', projectKey: '', transform: 'id-list' },
     ],
   };
   const conflictIssue = alternateProfileIssue(33, 'ENGINEERING-2', 'ENGINEERING', 'Finished', 3, '', 'South', 'Feature', '2026-02-02T00:00:00.000Z');
@@ -260,6 +265,114 @@ async function main() {
   assert.ok(ambiguousMetrics.quality.findings.some((finding) => finding.code === 'TEAM_FIELD_AMBIGUOUS'),
     'ambiguous legacy team aliases are reported defensively');
   assert.equal(ambiguousMetrics.relations[0].team, 'North', 'ambiguous legacy values fall back to the configured board route');
+
+  const attributionConfig = {
+    ...teamConflictConfig,
+    teams: [
+      { id: 'division-product', name: 'Product', aliases: [] },
+      { id: 'team-north', name: 'North', aliases: [], parentTeamId: 'division-product', activeFrom: '2026-01-01', activeTo: '2026-12-31' },
+      { id: 'team-south', name: 'South', aliases: [], parentTeamId: 'division-product', activeFrom: '2026-01-01', activeTo: '2026-12-31' },
+      { id: 'team-retired', name: 'Retired', aliases: [], activeFrom: '2025-01-01', activeTo: '2026-02-10' },
+    ],
+    teamAssignments: {
+      projects: [{ projectKey: 'ENGINEERING', teamId: 'team-north', activeFrom: '2026-01-01', activeTo: '2026-12-31' }],
+      components: [
+        { projectKey: 'ENGINEERING', componentId: '501', componentName: 'UI', teamId: 'team-south', activeFrom: '', activeTo: '' },
+        { projectKey: 'ENGINEERING', componentId: '502', componentName: 'API', teamId: 'team-north', activeFrom: '', activeTo: '' },
+      ],
+      issueOverrides: [{ issueKey: 'ENGINEERING-7', teamId: 'team-south', activeFrom: '2026-02-01', activeTo: '2026-03-01' }],
+    },
+  };
+  const unroutedSprint = { ...routedSprint, id: '78', originBoardId: '99', name: 'Unrouted Sprint' };
+  const projectIssue = alternateProfileIssue(36, 'ENGINEERING-5', 'ENGINEERING', 'Finished', 2, '', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  const componentIssue = alternateProfileIssue(37, 'ENGINEERING-6', 'ENGINEERING', 'Finished', 3, '', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  componentIssue.fields.components = [{ id: '501', name: 'UI' }];
+  const overrideIssue = alternateProfileIssue(38, 'ENGINEERING-7', 'ENGINEERING', 'Finished', 5, '', 'North', 'Feature', '2026-02-02T00:00:00.000Z');
+  const inactiveFieldIssue = alternateProfileIssue(39, 'ENGINEERING-8', 'ENGINEERING', 'Finished', 1, '', 'Retired', 'Feature', '2026-02-02T00:00:00.000Z');
+  const unmappedTeamIssue = alternateProfileIssue(41, 'UNKNOWN-10', 'UNKNOWN', 'Finished', 1, '', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  [projectIssue, componentIssue, overrideIssue, inactiveFieldIssue, unmappedTeamIssue].forEach((issue) => { issue.fields.customfield_sprints = ['78']; });
+  const boardPrecedenceIssue = alternateProfileIssue(40, 'ENGINEERING-9', 'ENGINEERING', 'Finished', 8, '', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  boardPrecedenceIssue.fields.components = [{ id: '501', name: 'UI' }];
+  boardPrecedenceIssue.fields.customfield_sprints = ['77'];
+  const attributionMetrics = calculateMetrics([projectIssue, componentIssue, overrideIssue, inactiveFieldIssue, boardPrecedenceIssue, unmappedTeamIssue], [routedSprint, unroutedSprint], attributionConfig);
+  const attributionByKey = new Map(attributionMetrics.relations.map((relation) => [relation.issue.key, relation]));
+  assert.equal(attributionByKey.get('ENGINEERING-5').team, 'North', 'project defaults attribute issues when no narrower source is available');
+  assert.deepEqual(attributionByKey.get('ENGINEERING-5').teamPath, ['Product', 'North'], 'reports retain the configured team hierarchy path');
+  assert.equal(attributionByKey.get('ENGINEERING-6').team, 'South', 'component mappings override project defaults');
+  assert.equal(attributionByKey.get('ENGINEERING-7').team, 'South', 'active issue overrides take precedence over team fields and project mappings');
+  assert.equal(attributionByKey.get('ENGINEERING-8').team, 'North', 'inactive team labels fall back to the next active mapping');
+  assert.equal(attributionByKey.get('ENGINEERING-9').team, 'North', 'board routes take precedence over component and project defaults');
+  assert.equal(attributionMetrics.summary.unmappedTeamRelationCount, 1, 'team-only exclusions are counted explicitly while universal issue totals retain the issue');
+  assert.ok(attributionMetrics.quality.findings.some((finding) => finding.code === 'TEAM_FIELD_INACTIVE'), 'inactive team labels are distinct from unknown labels');
+  assert.ok(attributionMetrics.quality.findings.some((finding) => finding.code === 'TEAM_ATTRIBUTION_CONFLICT'), 'disagreeing active sources are exposed as attribution conflicts');
+  assert.ok(attributionMetrics.sprintMetrics.some((metric) => metric.team === 'North' && metric.sprintId === '78'), 'project and component attribution enable team metrics for sprints without a board route');
+  assert.ok(attributionMetrics.sprintMetrics.some((metric) => metric.teamId === 'team-north' && metric.teamPath.join('/') === 'Product/North'), 'sprint rows retain the stable team identity and hierarchy');
+  assert.ok(attributionMetrics.personMetrics.some((metric) => metric.teamId === 'team-north' && metric.assigneeKey === 'person-1'), 'person reports use the same project team attribution');
+
+  const portfolioEpic = alternateProfileIssue(42, 'ENGINEERING-EPIC', 'ENGINEERING', 'Finished', 0, '', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  portfolioEpic.fields.issuetype = { id: '100', name: 'Epic' };
+  portfolioEpic.fields.customfield_9402 = '';
+  portfolioEpic.fields.customfield_sprints = [];
+  const portfolioChild = alternateProfileIssue(43, 'ENGINEERING-CHILD', 'ENGINEERING', 'Finished', 3, 'ENGINEERING-EPIC', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  portfolioChild.fields.customfield_sprints = ['78'];
+  const portfolioMetrics = calculateMetrics([portfolioEpic, portfolioChild], [unroutedSprint], attributionConfig);
+  assert.deepEqual(portfolioMetrics.epics[0].teamGroups, [{ teamId: 'team-north', team: 'North', issueCount: 1 }],
+    'portfolio epics group distinct child issues by the team that had sprint attribution');
+  const portfolioSnapshot = publicSnapshot(portfolioMetrics, [], [], [], {}, [], attributionConfig);
+  assert.deepEqual(portfolioSnapshot.epics[0].teamGroups, portfolioMetrics.epics[0].teamGroups, 'portfolio team groups reach the renderer snapshot');
+
+  const ambiguousComponentIssue = alternateProfileIssue(47, 'ENGINEERING-47', 'ENGINEERING', 'Finished', 2, '', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  ambiguousComponentIssue.fields.components = [{ id: '501', name: 'UI' }, { id: '502', name: 'API' }];
+  ambiguousComponentIssue.fields.customfield_sprints = ['78'];
+  const ambiguousComponentMetrics = calculateMetrics([ambiguousComponentIssue], [unroutedSprint], attributionConfig);
+  assert.ok(ambiguousComponentMetrics.quality.findings.some((finding) => finding.code === 'COMPONENT_TEAM_AMBIGUOUS'), 'multi-team component evidence is a distinct attribution-quality state');
+  assert.equal(ambiguousComponentMetrics.relations[0].teamId, 'team-north', 'ambiguous component mappings fall through to the project default');
+
+  const datedRouteConfig = {
+    ...teamConflictConfig,
+    boardRoutes: [
+      { boardId: '21', teamId: 'team-south', activeTo: '2026-02-07' },
+      { boardId: '21', teamId: 'team-north', activeFrom: '2026-02-08' },
+    ],
+    teamAssignments: { projects: [], components: [], issueOverrides: [] },
+  };
+  const earlySprint = { ...routedSprint, id: '76', startDate: '2026-02-01T00:00:00.000Z', activatedDate: '2026-02-01T00:00:00.000Z', endDate: '2026-02-07T00:00:00.000Z', completeDate: '2026-02-07T00:00:00.000Z' };
+  const earlyRouteIssue = alternateProfileIssue(44, 'ENGINEERING-ROUTE-1', 'ENGINEERING', 'Finished', 1, '', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  earlyRouteIssue.key = 'ENGINEERING-44';
+  earlyRouteIssue.fields.customfield_sprints = ['76'];
+  const lateRouteIssue = alternateProfileIssue(45, 'ENGINEERING-45', 'ENGINEERING', 'Finished', 1, '', '', 'Feature', '2026-02-02T00:00:00.000Z');
+  lateRouteIssue.fields.customfield_sprints = ['77'];
+  const datedRouteMetrics = calculateMetrics([earlyRouteIssue, lateRouteIssue], [earlySprint, routedSprint], datedRouteConfig);
+  assert.equal(datedRouteMetrics.relations.find((relation) => relation.issue.key === 'ENGINEERING-44').teamId, 'team-south', 'board routes use the effective team on the sprint end date');
+  assert.equal(datedRouteMetrics.relations.find((relation) => relation.issue.key === 'ENGINEERING-45').teamId, 'team-north', 'a later route interval preserves the next team assignment');
+
+  const businessDb = openDatabase(path.join(temporaryDirectory, 'project-attributed-business.sqlite'));
+  saveConfig(businessDb, {
+    projects: ['PLAN'], projectRoles: { commitments: ['PLAN'] },
+    teams: [{ id: 'team-plan', name: 'Plan Team', parentTeamId: '', aliases: [], activeFrom: '', activeTo: '' }],
+    teamAssignments: { projects: [{ projectKey: 'PLAN', teamId: 'team-plan', activeFrom: '', activeTo: '' }], components: [], issueOverrides: [] },
+    fieldMappings: [
+      { semanticKey: 'storyPoints', providerFieldId: 'customfield_points', projectKey: 'PLAN', transform: 'number' },
+      { semanticKey: 'sprint', providerFieldId: 'customfield_sprints', projectKey: 'PLAN', transform: 'id-list' },
+    ],
+    workflows: { commitment: { entryStatuses: ['Committed'], completedStatuses: ['Finished'], milestones: [] } },
+    modules: { commitments: true, businessSprint: true },
+  });
+  saveSprint(businessDb, {
+    id: '301', originBoardId: '999', name: 'Planning sprint', state: 'closed',
+    startDate: '2026-02-01T00:00:00.000Z', activatedDate: '2026-02-01T00:00:00.000Z',
+    endDate: '2026-02-14T00:00:00.000Z', completeDate: '2026-02-14T00:00:00.000Z',
+  }, 'synthetic-fixture.json', null);
+  const committedIssue = alternateProfileIssue(46, 'PLAN-1', 'PLAN', 'Committed', 8, '', '', 'Feature', null);
+  committedIssue.fields.customfield_points = 8;
+  committedIssue.fields.customfield_sprints = ['301'];
+  committedIssue.changelog = { startAt: 0, total: 0, histories: [] };
+  saveIssue(businessDb, committedIssue, 'synthetic-fixture.json', null);
+  assert.equal(listBusinessSprints(businessDb).find((sprint) => sprint.id === '301')?.teamRoute, '', 'business sprint discovery includes valid sprints with no board route');
+  const businessReport = getBusinessSprintReport(businessDb, { sprintId: '301' });
+  assert.equal(businessReport.teams.find((team) => team.teamId === 'team-plan')?.committedCount, 1, 'business sprint totals use the same project default and stable team ID');
+  assert.equal(businessReport.unmapped.count, 0);
+  businessDb.close();
 }
 
 main().then(() => {

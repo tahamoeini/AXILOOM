@@ -45,6 +45,7 @@ const profile = validateConfig({
 assert.equal(profile.schemaVersion, 2, 'version 1 profiles migrate with private network access as the default');
 assert.deepEqual(profile.sourceInstance.networkAccess, { mode: 'private', approvedAddresses: [] });
 assert.equal(profile.boardRoutes[0].team, 'Platform');
+assert.equal(profile.boardRoutes[0].activeFrom, '', 'legacy board routes remain open-ended after normalization');
 assert.equal(profile.fieldMappings[0].providerFieldId, 'customfield_12345');
 assert.deepEqual(profile.projectRoles.productIntake, ['IDEAS']);
 assert.equal(profile.calendar.timeZone, 'Europe/Berlin');
@@ -79,6 +80,64 @@ assert.throws(() => validateConfig({ projects: ['OPS'], fieldMappings: [{ semant
 assert.throws(() => validateConfig({ teams: [{ id: 'team-a', name: 'A' }], boardRoutes: [{ boardId: '42', teamId: 'missing' }] }), /unknown team/);
 assert.throws(() => validateConfig({ teams: [{ id: 'team-a', name: 'North', aliases: ['Shared'] }, { id: 'team-b', name: 'South', aliases: ['shared'] }] }), /Team label .* is ambiguous/);
 assert.doesNotThrow(() => validateConfig({ teams: [{ id: 'team-a', name: 'North', aliases: ['north'] }, { id: 'team-b', name: 'South' }] }), 'case-insensitive duplicate aliases within one team are harmless');
+const organizationProfile = validateConfig({
+  projects: ['ALPHA'],
+  teams: [
+    { id: 'division-product', name: 'Product' },
+    { id: 'team-north', name: 'North', parentTeamId: 'division-product', activeFrom: '2026-01-01', activeTo: '2026-12-31' },
+  ],
+  teamAssignments: {
+    projects: [{ projectKey: 'ALPHA', teamId: 'team-north', activeFrom: '2026-02-01', activeTo: '2026-06-30' }],
+    components: [{ projectKey: 'ALPHA', componentId: '501', componentName: 'Frontend', teamId: 'team-north' }],
+    issueOverrides: [{ issueKey: 'ALPHA-10', teamId: 'team-north' }],
+  },
+});
+assert.equal(organizationProfile.teams[1].parentTeamId, 'division-product');
+assert.equal(organizationProfile.teamAssignments.projects[0].teamId, 'team-north');
+assert.equal(organizationProfile.teamAssignments.issueOverrides[0].issueKey, 'ALPHA-10');
+assert.throws(() => validateConfig({ teams: [{ id: 'team-a', name: 'A', parentTeamId: 'team-b' }, { id: 'team-b', name: 'B', parentTeamId: 'team-a' }] }), /hierarchy contains a cycle/);
+const datedRoutes = validateConfig({
+  projects: ['ALPHA'],
+  teams: [{ id: 'team-a', name: 'A' }, { id: 'team-b', name: 'B' }],
+  boardRoutes: [
+    { boardId: '42', teamId: 'team-a', activeTo: '2026-03-31' },
+    { boardId: '42', teamId: 'team-b', activeFrom: '2026-04-01' },
+  ],
+});
+assert.equal(datedRoutes.boardRoutes.length, 2, 'a board can move between teams using non-overlapping UTC intervals');
+assert.throws(() => validateConfig({
+  projects: ['ALPHA'], teams: [{ id: 'team-a', name: 'A' }, { id: 'team-b', name: 'B' }],
+  boardRoutes: [
+    { boardId: '42', teamId: 'team-a', activeTo: '2026-04-01' },
+    { boardId: '42', teamId: 'team-b', activeFrom: '2026-04-01' },
+  ],
+}), /overlapping effective dates/);
+assert.throws(() => validateConfig({ teams: [{ id: 'team-a', name: 'A', activeFrom: '2026-02-30' }] }), /valid ISO date/);
+assert.throws(() => validateConfig({ projects: ['ALPHA'], teams: [{ id: 'team-a', name: 'A' }, { id: 'team-b', name: 'B' }], teamAssignments: { projects: [
+  { projectKey: 'ALPHA', teamId: 'team-a', activeFrom: '2026-01-01', activeTo: '2026-03-31' },
+  { projectKey: 'ALPHA', teamId: 'team-b', activeFrom: '2026-03-01', activeTo: '2026-06-30' },
+] } }), /overlapping effective dates/);
+assert.throws(() => validateConfig({ teams: [{ id: 'team-a', name: 'A' }], teamAssignments: { issueOverrides: [{ issueKey: 'unknown', teamId: 'team-a' }] } }), /Invalid issue key/);
+const projectAttributedDelivery = validateConfig({
+  projects: ['ALPHA'], projectRoles: { technicalDelivery: ['ALPHA'] },
+  teams: [{ id: 'team-alpha', name: 'Alpha' }],
+  teamAssignments: { projects: [{ projectKey: 'ALPHA', teamId: 'team-alpha' }] },
+  fieldMappings: [{ semanticKey: 'sprint', providerFieldId: 'customfield_sprints', projectKey: 'ALPHA', transform: 'id-list' }],
+  modules: { delivery: true },
+});
+assert.equal(projectAttributedDelivery.boardRoutes.length, 0, 'delivery can be configured with project attribution and no board route');
+const projectAttributedCommitments = validateConfig({
+  projects: ['ALPHA'], projectRoles: { commitments: ['ALPHA'] },
+  teams: [{ id: 'team-alpha', name: 'Alpha' }],
+  teamAssignments: { projects: [{ projectKey: 'ALPHA', teamId: 'team-alpha' }] },
+  fieldMappings: [
+    { semanticKey: 'storyPoints', providerFieldId: 'customfield_points', projectKey: 'ALPHA', transform: 'number' },
+    { semanticKey: 'sprint', providerFieldId: 'customfield_sprints', projectKey: 'ALPHA', transform: 'id-list' },
+  ],
+  workflows: { commitment: { entryStatuses: ['Committed'] } },
+  modules: { commitments: true, businessSprint: true },
+});
+assert.equal(projectAttributedCommitments.modules.businessSprint, true, 'sprint commitments can use a project team default without a board route');
 assert.throws(() => validateConfig({ calendar: { timeZone: 'Unknown/Zone' } }), /Unknown time zone/);
 assert.throws(() => validateConfig({ calendar: { configured: true, workingDays: [] } }), /at least one working day/);
 
