@@ -103,10 +103,13 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
   const activeTemplate = (config?.recordTemplates || []).find((template) => template.kind === targetKind && template.enabled);
 
   useEffect(() => {
-    if (!pendingRecord || pendingRecord.kind !== targetKind) return;
+    if (!pendingRecord) return;
+    const strategyRecord = page === 'objectives' && strategyTemplates.some((template) => template.kind === pendingRecord.kind);
+    if (pendingRecord.kind !== targetKind && !strategyRecord) return;
+    if (strategyRecord) setStrategyKind(pendingRecord.kind);
     setEditor({ kind: pendingRecord.kind, record: pendingRecord.record });
     clearPending?.();
-  }, [pendingRecord, targetKind, clearPending]);
+  }, [pendingRecord, targetKind, strategyTemplates, page, clearPending]);
 
   const allRecords = snapshot.records.filter((record) => record.kind === targetKind);
   const records = useMemo(() => allRecords.filter((record) => (!query || `${record.title} ${JSON.stringify(record.payload)}`.toLowerCase().includes(query.toLowerCase())) && (!status || String(record.payload.status || '') === status)), [allRecords, query, status]);
@@ -114,9 +117,6 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
   const dueSoon = allRecords.filter((record) => record.payload.dueAt && !['Done', 'Closed', 'Resolved', 'Rejected'].includes(String(record.payload.status)));
   const relatedRecords = snapshot.links.filter((link) => link.kind === 'request' || link.kind === 'action');
   const statuses = Array.from(new Set(allRecords.map((record) => String(record.payload.status || '')).filter(Boolean))).sort();
-  const meetingOptions = snapshot.records.filter((record) => record.kind === 'meeting').map((record) => ({ id: record.id, title: record.title }));
-  const decisionOptions = snapshot.records.filter((record) => record.kind === 'decision').map((record) => ({ id: record.id, title: record.title }));
-  const actionOptions = snapshot.records.filter((record) => record.kind === 'action').map((record) => ({ id: record.id, title: record.title }));
   const objectiveOptions = snapshot.records.filter((record) => record.kind === 'objective').map((record) => ({ id: record.id, title: record.title }));
 
   const saveRelationship = async (input: Parameters<typeof window.axiloom.saveRecordRelationship>[0]) => {
@@ -271,6 +271,6 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
     </section>
 
     {targetKind === 'action' && dueSoon.length > 0 && <div className="callout amber"><Clock3 size={15} /><span>{formatNumber(dueSoon.length, 0)} تعهد موعد مشخص دارد. اگر وضعیت انتظار از پاسخ بیرونی است، مسئول پاسخ و وابستگی را ثبت کنید تا تأخیر به فرد محصول نسبت داده نشود.</span></div>}
-    {editor && <RecordEditor kind={editor.kind} template={(config?.recordTemplates || []).find((item) => item.kind === editor.kind)} record={editor.record} jiraUrl={jiraUrl} close={() => setEditor(null)} save={saveCurrent} recordOptions={snapshot.records} relationships={snapshot.relationships} onSaveRelationship={saveRelationship} onArchiveRelationship={archiveRelationship} meetingOptions={meetingOptions} decisionOptions={decisionOptions} actionOptions={actionOptions} objectiveOptions={objectiveOptions} />}
+    {editor && <RecordEditor kind={editor.kind} template={(config?.recordTemplates || []).find((item) => item.kind === editor.kind)} record={editor.record} jiraUrl={jiraUrl} close={() => setEditor(null)} save={saveCurrent} recordOptions={snapshot.records} relationships={snapshot.relationships} onSaveRelationship={saveRelationship} onArchiveRelationship={archiveRelationship} />}
   </>;
 }

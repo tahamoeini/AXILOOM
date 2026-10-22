@@ -7,10 +7,11 @@
   </head>
   <body>
     <div id="root"></div>
-    <script>
+    <script type="module">
+      import recordTemplates from '/shared/record-templates.json';
       (() => {
         const config = {
-          schemaVersion: 3,
+          schemaVersion: 4,
           configurationRevision: 1,
           migrationStatus: 'configured',
           migrationWarnings: [],
@@ -55,6 +56,7 @@
           adhocHoursWarning: 0.3,
           capacityOverrides: [],
           stakeholderContactPoints: [],
+          recordTemplates,
         };
         const snapshot = {
           summary: {
@@ -63,10 +65,10 @@
             openActions: 0, openRequests: 0, decisions: 0, outcomes: 0,
           },
           teams: ['Synthetic Team'], projects: [], sprintMetrics: [], people: [], issues: [], issueTotal: 0,
-          epics: [], records: [], links: [],
+          epics: [], records: [], relationships: [], links: [],
           business: { summary: {}, issues: [], statuses: [], components: [], assignees: [], componentAssignees: [], agingBuckets: [], monthly: [], ageMethod: '' },
           jiraIssueLinks: [], localIssueLinks: [],
-          quality: { findings: [], fieldCoverage: {}, unknownFields: [], incompleteHistories: 0, issuesWithoutHistory: 0, conflicts: 0, evidence: { issueRevisions: 0, issueHistoryEvents: 0, sprintRevisions: 0, localLinkEvents: 0 } },
+          quality: { findings: [], fieldCoverage: {}, unknownFields: [], incompleteHistories: 0, issuesWithoutHistory: 0, conflicts: 0, evidence: { issueRevisions: 0, issueHistoryEvents: 0, sprintRevisions: 0, localLinkEvents: 0, recordRelationshipEvents: 0 } },
           importRuns: [],
         };
         const syntheticIssue = {

@@ -22,7 +22,7 @@ const navigation: Array<{ id: PageId; label: string; group: string; icon: typeof
   { id: 'delivery', label: 'تحویل', group: 'گزارش‌ها', icon: BarChart3 },
   { id: 'portfolio', label: 'پرتفوی', group: 'گزارش‌ها', icon: Layers3 },
   { id: 'business', label: 'ورودی محصول', group: 'گزارش‌ها', icon: GitPullRequestArrow },
-  { id: 'objectives', label: 'هدف‌ها', group: 'محصول', icon: Target },
+  { id: 'objectives', label: 'Product register', group: 'محصول', icon: Target },
   { id: 'requests', label: 'درخواست‌ها', group: 'محصول', icon: GitPullRequestArrow },
   { id: 'actions', label: 'تعهدها', group: 'محصول', icon: ListChecks },
   { id: 'decisions', label: 'تصمیم‌ها', group: 'محصول', icon: ClipboardList },
@@ -156,8 +156,8 @@ export default function App() {
   }
 
   function openRecord(kind: RecordKind, record?: ProductRecord) {
-    const destination: Record<RecordKind, PageId> = { objective: 'objectives', action: 'actions', request: 'requests', decision: 'decisions', meeting: 'meetings', outcome: 'outcomes', stakeholder: 'stakeholders' };
-    setPage(destination[kind]);
+    const destination: Partial<Record<RecordKind, PageId>> = { objective: 'objectives', product: 'objectives', initiative: 'objectives', action: 'actions', request: 'requests', decision: 'decisions', meeting: 'meetings', outcome: 'outcomes', stakeholder: 'stakeholders' };
+    setPage(destination[kind] || 'objectives');
     setPendingRecord({ kind, record, nonce: Date.now() });
   }
 

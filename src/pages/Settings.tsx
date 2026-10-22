@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArchiveRestore, Check, Download, KeyRound, LockKeyhole, Plus, RefreshCw, Server, Trash2, Upload, Wifi } from 'lucide-react';
-import type { AppConfig, JiraCatalog, Snapshot } from '../types';
+import type { AppConfig, JiraCatalog, RecordTemplate, Snapshot } from '../types';
 import { SectionHeading } from '../components/Primitives';
 
 type Notice = { tone: 'success' | 'error' | 'info'; text: string };
@@ -54,8 +54,10 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
   const [saveToken, setSaveToken] = useState(false);
   const [connection, setConnection] = useState<{ ok: boolean; displayName: string; account: string } | null>(null);
   const [patRecords, setPatRecords] = useState<Array<{ id: string; name: string; createdAt: string; expiresAt: string }> | null>(null);
+  const [recordTemplateText, setRecordTemplateText] = useState(() => JSON.stringify(config?.recordTemplates || [], null, 2));
 
   useEffect(() => { if (config) setDraft(config); }, [config]);
+  useEffect(() => { if (config) setRecordTemplateText(JSON.stringify(config.recordTemplates, null, 2)); }, [config?.configurationRevision]);
   useEffect(() => {
     window.axiloom.getWorkspaceInfo().then(setWorkspaceInfo).catch(() => undefined);
   }, []);
@@ -104,6 +106,19 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       notify({ tone: 'success', text: `Configuration revision ${saved.configurationRevision} saved.` });
     } catch (error) {
       notify({ tone: 'error', text: error instanceof Error ? error.message : 'Configuration could not be saved.' });
+    } finally { setWorking(''); }
+  };
+  const applyRecordTemplates = async () => {
+    setWorking('templates');
+    try {
+      const parsed = JSON.parse(recordTemplateText);
+      if (!Array.isArray(parsed)) throw new Error('Record templates must be a JSON array.');
+      const validated = await window.axiloom.validateConfig({ ...draft, recordTemplates: parsed as RecordTemplate[] });
+      update('recordTemplates', validated.recordTemplates);
+      setRecordTemplateText(JSON.stringify(validated.recordTemplates, null, 2));
+      notify({ tone: 'success', text: 'Typed record templates are valid in this draft. Save the workspace configuration to activate them.' });
+    } catch (error) {
+      notify({ tone: 'error', text: error instanceof Error ? error.message : 'Record templates could not be validated.' });
     } finally { setWorking(''); }
   };
   const refreshMetadata = async () => {
@@ -453,6 +468,13 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     <section className="panel settings-panel">
       <SectionHeading title="Modules" hint="Enable modules only after their required project roles, fields and workflow policies are configured." />
       <div className="module-grid">{moduleFields.map((module) => <label className="module-choice" key={module.key}><input type="checkbox" checked={Boolean(draft.modules[module.key])} onChange={(event) => update('modules', { ...draft.modules, [module.key]: event.target.checked })} /><span><b>{module.label}</b><small>{module.description}</small></span></label>)}</div>
+    </section>
+
+    <section className="panel settings-panel">
+      <SectionHeading title="Product record templates" hint="Configure register labels, fields, required values, enums, and typed record references. Templates accept data only; scripts and executable form logic are unsupported." />
+      <label className="form-field full"><span>Template registry JSON</span><textarea className="template-registry-input" value={recordTemplateText} onChange={(event) => setRecordTemplateText(event.target.value)} spellCheck={false} rows={14} /></label>
+      <p className="field-hint">Field types: text, textarea, date, enum, recordRef, issueRef, issueRefList, number, boolean. Record references must name configured template kinds.</p>
+      <button className="button secondary" onClick={() => void applyRecordTemplates()} disabled={working === 'templates'}><Check size={14} />{working === 'templates' ? 'Validating templates…' : 'Validate template draft'}</button>
     </section>
 
     <section className="panel settings-panel">
