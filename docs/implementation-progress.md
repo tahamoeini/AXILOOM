@@ -8,14 +8,15 @@
 
 | Item | Observed state |
 |---|---|
-| Source baseline | `master` at `1c92613c6b48c2e24210f12676937a0e649f706d`, tag `v1.0.13`. |
-| Source worktree | Inspected as clean before work; unchanged by this mission. |
+| Source baseline | `master` at `6a1a91573607be467fb45d100240d79ba4c4b092`, tag `v1.0.14`; rechecked read-only on 2026-10-22. |
+| Source worktree | Clean on `master` at the recheck; unchanged by this mission. |
 | Destination | `F:\Projects\AXILOOM`, branch `codex/axiloom-transformation`, baseline commit `89bc9500417550bf11eadcfe6f262e523141243f`. |
-| Destination repository target | `https://github.com/tahamoeini/AXILOOM.git`; GitHub confirms the repository exists, is public, and the connected account has admin/push permission. The local branch tracks the same-named remote branch. A direct `git ls-remote` could not run because the local network layer returned `getaddrinfo() thread failed to start`; current GitHub API reads found no intended review branch or PR. A public push was rejected by automatic review pending explicit authorization for this destination and payload; no push occurred. |
+| Current destination revision | `e033caa4648020a50851b57e38b983f8001090a2`; this commit includes the streaming-iterator lifetime fix. The current uncommitted changes are verification-record updates only. |
+| Destination repository target | `https://github.com/tahamoeini/AXILOOM.git`; GitHub API confirms the repository is public and `codex/axiloom-transformation` is its default branch. The latest live commit is `e033caa4648020a50851b57e38b983f8001090a2`, matching local HEAD. No PR exists. Local `git ls-remote` failed with `getaddrinfo() thread failed to start`. An earlier attempt to create a separate public review branch was rejected by automatic review; the current verification-record edits are uncommitted and unpublished. |
 | License | No `LICENSE` file is present. The intended code license and release attribution have not been selected or documented. |
 | Source preservation | The staged destination began as a byte-identical copy of 63 tracked source files. Original checkout and history remain untouched. Tenant-derived catalog and export schemas have since been replaced with generic shapes in this destination. |
-| Automated checks | Configuration, data-access, workspace isolation, and workspace migration suites passed on 2026-10-22. The migration test requires local filesystem access for temporary-file replacement. |
-| Renderer build | Fresh TypeScript and Vite production build passed on 2026-10-22 with local filesystem access. The sandboxed invocation fails at Vite `realpath` with `EPERM`. |
+| Automated checks | Configuration, data-access, workspace isolation, and workspace migration suites passed on 2026-10-22. The workspace and migration tests require `TEMP`/`TMP` to point inside the authorized checkout under the current sandbox. |
+| Renderer build | TypeScript and Vite production build passed on 2026-10-22 with an escalated local build invocation. The ordinary sandbox invocation fails at asynchronous Vite `realpath` with `EPERM`, while synchronous `realpath` succeeds. |
 | UI/E2E | The actual renderer was opened in the in-app browser through a synthetic in-memory bridge. Overview and Objectives rendered; an Objective and explicitly linked `Unknown` Outcome were added. This does not exercise Electron IPC, SQLite persistence, Jira, exports, or accessibility. |
 | Package/release | Not built. The expected verified Electron runtime archive is not available in the local cache. |
 
@@ -24,6 +25,7 @@
 - `tools/migrate-workspace.mjs`, `tools/test-workspace-migration.mjs`, `electron/database.cjs`, and `package.json`: add a closed-workspace copy migration, staging-only schema changes, evidence/count reconciliation, source-file immutability checks, and a genuine minimal schema-version-1 fixture.
 - `electron/configuration.cjs`, `electron/metrics.cjs`, `tools/test-configuration.mjs`, and `tools/test-data-access.mjs`: reject cross-team label collisions and report issue-field/board-route disagreements or unknown/ambiguous team values without changing established attribution. The added sprint fixture also exposed and fixes handling of workflow completion status sets.
 - `electron/configuration.cjs`, `electron/database.cjs`, `electron/main.cjs`, `src/App.tsx`, `src/pages/Settings.tsx`, and `tools/test-configuration.mjs`: bind one stable source identity to each workspace; confirm the source label before offline imports; allow explicit one-time identity attestation for legacy offline evidence; reject later rebinds; clear saved credentials and endpoint metadata on pre-ingestion source changes.
+- `electron/database.cjs` and `electron/jira-worker.cjs`: retain prepared SQLite statements for the lifetime of streaming iterators after a report regression exposed intermittent `statement has been finalized` failures under garbage collection.
 - `tools/renderer-harness.html`: add a browser-only synthetic renderer fixture using an in-memory bridge.
 - `README.md`, `docs/configuration-model.md`, `docs/generalization-coverage.csv`, `docs/implementation-progress.md`, `docs/recovery-review.md`, `docs/workspace-migration.md`, and `docs/release-verification.md`: record usage, coverage, verification evidence, and remaining release gates.
 
@@ -32,7 +34,7 @@
 | WP | Status | Current evidence and open work |
 |---|---|---|
 | WP00 Baseline and inventory | Partial | Source and destination inspected; source commit and pristine state recorded. Observable report baselines and complete route/IPC/security inventory remain. |
-| WP01 Destination and identity | Partial | Neutral Axiloom identity, clean-history branch, and existing public GitHub target are in place. Public code licensing/attribution is unspecified, and remote state could not be queried through local Git networking. |
+| WP01 Destination and identity | Partial | Neutral Axiloom identity, clean-history branch, and public GitHub target are in place; live API verification confirms the default branch contains commits through `e033caa`. Public code licensing/attribution is unspecified, and no PR/CI review covers the published work. |
 | WP02 Workspace/source isolation | Partial | Each workspace now keeps one stable source identity; changes are rejected after issue, sprint, history, import, tombstone, or local-link evidence exists. Offline imports confirm one source label, and legacy unbound offline evidence requires explicit first-import attestation. Pre-ingestion changes clear stored credentials and Jira metadata. Duplicate issue and sprint IDs remain isolated across synthetic workspace databases. Multiple sources inside one workspace and Electron-level source switching remain unsupported. |
 | WP03 Dynamic configuration | Partial | Versioned profile normalization, validation, settings, and config revision history exist. Complete setup wizard, policy completeness, and alternative-profile acceptance remain. |
 | WP04 Provider adapters | Partial | Offline JSON and a Jira Server/Data Center bearer-token path exist. No live tenant test; Jira Cloud OAuth is unimplemented and explicitly unclaimed. |
@@ -55,10 +57,11 @@
 | Check | Result |
 |---|---|
 | `npm run test:configuration` | Passed, including source identity validation, credential/cache cleanup before ingestion, rebind rejection after issue or sprint-only evidence, and explicit legacy offline-source attestation. |
-| `npm run test:data-access` | Passed against synthetic configured Jira data, including cross-profile mappings, team conflict/unknown/ambiguous attribution, and sprint workflow status handling. |
-| `npm run test:workspaces` | Passed with local filesystem access; two workspaces retain the same issue ID/key and sprint ID with distinct source identities and raw records. |
-| `npm run test:migration` | Passed with local filesystem access; synthetic source/destination schema reconciliation, dry-run cleanup, byte-preservation, and no-overwrite checks. |
-| `npm run build` | Passed with local filesystem access; TypeScript check and Vite bundle completed. Sandboxed Vite access failed with `EPERM`. |
+| `npm run test:data-access` | Passed twice consecutively after the streaming-statement fix, including filtered business reports and paginated exports. |
+| `npm run test:workspaces` | Passed with `TEMP`/`TMP` redirected to `.test-tmp` inside the checkout; the default Windows sandbox temp path failed during atomic rename with `EPERM`. Two workspaces retain the same issue ID/key and sprint ID with distinct source identities and raw records. |
+| `npm run test:migration` | Passed with `TEMP`/`TMP` redirected inside the checkout; synthetic source/destination schema reconciliation, dry-run cleanup, byte-preservation, and no-overwrite checks passed. |
+| `npm run build` | Passed with an escalated local build invocation; TypeScript and Vite bundle completed. The ordinary sandbox invocation failed at asynchronous Vite `realpath` with `EPERM`. |
+| `node --check` | Passed for `electron/main.cjs`, `electron/preload.cjs`, `electron/database.cjs`, and `electron/jira-worker.cjs`. |
 | Renderer UI fixture | Passed in the in-app browser using a synthetic in-memory bridge; Electron, persistence, exports, and accessibility were not exercised. |
 | Windows portable archive | Renderer build completed, then packaging stopped because the verified Electron `45.0.0` Windows x64 runtime archive is unavailable locally. |
 | macOS package | Not built in this Windows environment. |
