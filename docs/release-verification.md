@@ -1,7 +1,7 @@
 # Release verification record
 
 **Updated:** 2026-10-22
-**Release status:** Not releasable. The renderer builds, but no desktop artifact has been produced. The latest code commit is present on the public default branch; no PR or CI review exists, and this verification-record update remains uncommitted.
+**Release status:** Not releasable. The renderer builds, but no desktop artifact has been produced. The latest code commit is present on the public default branch; no PR or CI review exists, and this verification-record update is committed locally but unpublished.
 
 ## Local checks
 
@@ -19,7 +19,7 @@
 
 `npm run build:portable` completed the renderer build, then stopped because the verified official Electron `45.0.0` Windows x64 runtime archive is not present in the local cache. The script exits before replacing release output. No portable package, archive, checksum, or fresh-install result was produced. macOS packaging was not run in this Windows environment.
 
-GitHub API verification on 2026-10-22 confirms `tahamoeini/AXILOOM` is public, `codex/axiloom-transformation` is the default branch, and its latest commit is `e033caa4648020a50851b57e38b983f8001090a2`, matching local HEAD. No PR exists. Local `git ls-remote` previously failed with `getaddrinfo() thread failed to start`. An earlier attempt to create a separate public review branch was rejected by automatic review because public publication required explicit authorization for the exact destination and payload; that review branch was not created. The verification-record edits in this checkout are uncommitted and unpublished. The Product360 source remains untouched.
+GitHub API verification on 2026-10-22 confirms `tahamoeini/AXILOOM` is public, `codex/axiloom-transformation` is the default branch, and its latest code commit is `e033caa4648020a50851b57e38b983f8001090a2`. No PR exists. Local `git ls-remote` previously failed with `getaddrinfo() thread failed to start`. An earlier attempt to create a separate public review branch was rejected by automatic review because public publication required explicit authorization for the exact destination and payload; that review branch was not created. This verification record is committed locally on top of the public code commit but remains unpublished. The Product360 source remains untouched.
 
 No `LICENSE` file is present in the destination. The intended code license and release attribution remain undecided; do not represent the source as permissively licensed.
 
