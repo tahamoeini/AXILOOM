@@ -202,7 +202,7 @@ export default function App() {
   const headerActions = (
     <>
       {config?.jiraUrl && <button className="button primary" onClick={() => setNewJiraIssue(true)}>ایجاد issue</button>}
-      <button className="button secondary" onClick={() => fileInput.current?.click()}><Upload size={16} /> ورود JSON</button>
+      <button id="import-json-action" className="button secondary" onClick={() => fileInput.current?.click()}><Upload size={16} /> ورود JSON</button>
       <input ref={fileInput} type="file" multiple hidden onChange={(event) => { startJsonImport(event.target.files); event.currentTarget.value = ''; }} />
       <button className="icon-button" title="بازخوانی فضای محلی" onClick={() => refresh()}><RefreshCw size={17} /></button>
     </>

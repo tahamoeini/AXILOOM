@@ -10,6 +10,7 @@
     <script type="module">
       import recordTemplates from '/shared/record-templates.json';
       (() => {
+        const onboardingPreview = new URLSearchParams(window.location.search).get('mode') === 'onboarding';
         const config = {
           schemaVersion: 4,
           configurationRevision: 1,
@@ -57,6 +58,18 @@
           capacityOverrides: [],
           stakeholderContactPoints: [],
           recordTemplates,
+          ...(onboardingPreview ? {
+            configurationRevision: 0,
+            migrationStatus: 'unconfigured',
+            workspaceName: 'New synthetic workspace',
+            sourceInstance: { id: '', provider: 'offline-json', displayName: '', endpoint: '', networkAccess: { mode: 'private', approvedAddresses: [] } },
+            projects: [],
+            projectRoles: { productIntake: [], technicalDelivery: [], commitments: [] },
+            teams: [],
+            teamAssignments: { projects: [], components: [], issueOverrides: [] },
+            fieldMappings: [],
+            modules: { delivery: false, portfolio: false, objectives: false, productIntelligence: true, productIntake: false, commitments: false, businessSprint: false, outcomes: true, organizationAnalytics: false },
+          } : {}),
         };
         const snapshot = {
           summary: {

@@ -14,6 +14,7 @@
     "test:semantic-mappings": "node tools/test-semantic-mapping.mjs",
     "test:configuration": "node tools/test-configuration.mjs",
     "test:reporting": "node tools/test-reporting.mjs && node electron/test-reporting.cjs",
+    "test:setup": "node tools/test-setup-checklist.mjs",
     "test:providers": "node tools/test-jira-providers.mjs",
     "test:workspaces": "node tools/test-workspaces.mjs",
     "test:migration": "node tools/test-workspace-migration.mjs",

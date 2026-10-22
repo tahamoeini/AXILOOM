@@ -742,6 +742,21 @@ button:focus-visible, summary:focus-visible, a:focus-visible, [tabindex]:focus-v
 .settings-page .callout.amber { border: 1px solid #f0d9ae; background: #fff9ec; color: #755b30; }
 .template-registry-input { min-height: 300px; direction: ltr; text-align: left; white-space: pre; font: 11px/1.5 Consolas,monospace; }
 .empty-state { padding: 14px; border: 1px dashed #d9e3e6; border-radius: 8px; color: #82939b; font-size: 12px; }
+.settings-index { display: grid; grid-template-columns: minmax(210px,.7fr) minmax(0,2fr); align-items: start; gap: 14px; padding: 14px; }
+.settings-index .settings-search { margin: 0; }
+.settings-index-links { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.settings-panel[id],.settings-savebar[id] { scroll-margin-block: 18px; }
+.settings-panel[id]:focus,.settings-savebar[id]:focus { outline: 3px solid #d9eeee; outline-offset: 2px; }
+.onboarding-panel .setup-checklist { display: grid; grid-column: 1/-1; grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); gap: 7px; margin: 7px 0 0; padding: 0; list-style: none; }
+.setup-step { display: grid; width: 100%; grid-template-columns: 24px minmax(0,1fr); align-items: center; gap: 8px; min-height: 48px; padding: 8px; border: 1px solid #e2ebec; border-radius: 8px; color: #506773; background: #fff; text-align: start; cursor: pointer; }
+.setup-step:hover { border-color: #a8c9cc; background: #f8fcfc; }
+.setup-step-state { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: #8d6a2e; background: #fff5de; font-size: 12px; font-weight: 750; }
+.setup-step.complete .setup-step-state { color: #25724f; background: #e6f5ec; }
+.setup-step.optional .setup-step-state { color: #76878f; background: #eef2f3; }
+.setup-step b,.setup-step small { display: block; }
+.setup-step b { font-size: 11px; }
+.setup-step small { margin-top: 2px; color: #82939b; font-size: 9px; }
+@media (max-width: 800px) { .settings-index { grid-template-columns: 1fr; } }
 @media (max-width: 1100px) { .team-registry-row,.assignment-row,.assignment-component-row,.board-route-row { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 900px) { .workspace-switcher { grid-template-columns: 1fr auto; }.workspace-path { grid-column: 1/-1; }.role-grid { grid-template-columns: 1fr; }.mapping-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.mapping-row > small { align-self: center; padding: 0; } }
 @media (max-width: 620px) { .settings-page .form-grid,.sync-facts { grid-template-columns: 1fr; }.team-row,.team-registry-row,.assignment-row,.assignment-component-row,.board-route-row { grid-template-columns: 1fr; }.mapping-row { grid-template-columns: 1fr; }.workspace-switcher { grid-template-columns: 1fr; }.workspace-path { grid-column: auto; }.settings-savebar { align-items: flex-start; flex-direction: column; }.settings-savebar .button { width: 100%; justify-content: center; } }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArchiveRestore, Check, Download, KeyRound, LockKeyhole, Plus, RefreshCw, Server, Trash2, Upload, Wifi } from 'lucide-react';
 import type { AppConfig, JiraCatalog, RecordTemplate, Snapshot } from '../types';
 import { SectionHeading } from '../components/Primitives';
+import { buildSetupSteps } from '../setup-checklist';
 
 type Notice = { tone: 'success' | 'error' | 'info'; text: string };
 type WorkspaceInfo = Awaited<ReturnType<typeof window.axiloom.getWorkspaceInfo>>;
@@ -35,6 +36,22 @@ const weekDays = [
   { value: 0, label: 'Sun' }, { value: 1, label: 'Mon' }, { value: 2, label: 'Tue' },
   { value: 3, label: 'Wed' }, { value: 4, label: 'Thu' }, { value: 5, label: 'Fri' }, { value: 6, label: 'Sat' },
 ];
+const settingsSections = [
+  { id: 'settings-workspace', label: 'Workspace' },
+  { id: 'settings-organization', label: 'Organization and display' },
+  { id: 'settings-connection', label: 'Connections and import' },
+  { id: 'settings-projects', label: 'Projects and boards' },
+  { id: 'settings-teams', label: 'Teams and attribution' },
+  { id: 'settings-fields', label: 'Semantic fields' },
+  { id: 'settings-classifications', label: 'Work and issue classifications' },
+  { id: 'settings-workflows', label: 'Workflow definitions' },
+  { id: 'settings-calendar', label: 'Calendar' },
+  { id: 'settings-capacity', label: 'Capacity policies' },
+  { id: 'settings-modules', label: 'Modules' },
+  { id: 'settings-templates', label: 'Product records' },
+  { id: 'settings-recovery', label: 'Data and recovery' },
+  { id: 'settings-review', label: 'Validate and save' },
+];
 
 export default function Settings({ config, setConfig, snapshot, refresh, notify, jiraProgress, isOnboarding = false }: {
   config: AppConfig | null;
@@ -55,6 +72,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
   const [connection, setConnection] = useState<{ ok: boolean; displayName: string; account: string } | null>(null);
   const [patRecords, setPatRecords] = useState<Array<{ id: string; name: string; createdAt: string; expiresAt: string }> | null>(null);
   const [recordTemplateText, setRecordTemplateText] = useState(() => JSON.stringify(config?.recordTemplates || [], null, 2));
+  const [settingsQuery, setSettingsQuery] = useState('');
 
   useEffect(() => { if (config) setDraft(config); }, [config]);
   useEffect(() => { if (config) setRecordTemplateText(JSON.stringify(config.recordTemplates, null, 2)); }, [config?.configurationRevision]);
@@ -74,6 +92,14 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     ...((draft?.projects || []).map((key) => [key, key] as const)),
   ]).entries()).sort(([left], [right]) => left.localeCompare(right)), [catalog, draft?.projects]);
   if (!draft) return <div className="loading-screen">Loading workspace configuration…</div>;
+
+  const setupSteps = buildSetupSteps(draft, Boolean(workspaceInfo?.id && draft.workspaceName.trim()), snapshot.summary.issueCount);
+  const visibleSettingsSections = settingsSections.filter((section) => section.label.toLocaleLowerCase().includes(settingsQuery.trim().toLocaleLowerCase()));
+  const focusSettingsSection = (id: string) => {
+    const target = document.getElementById(id);
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    target?.focus({ preventScroll: true });
+  };
 
   const update = <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => setDraft((current) => current ? { ...current, [key]: value } : current);
   const updateSourceName = (displayName: string) => update('sourceInstance', { ...draft.sourceInstance, displayName });
@@ -275,11 +301,18 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
   const statusText = (items: string[] | undefined) => (items || []).join(', ');
 
   return <main className="settings-page" dir={draft.organization.locale.toLowerCase().startsWith('fa') ? 'rtl' : 'ltr'}>
-    {isOnboarding && <section className="panel onboarding-panel"><div className="onboarding-mark">A</div><div><span className="eyebrow">FROM DECISIONS TO DELIVERY</span><h2>Set up your Axiloom workspace</h2><p>Start with a local workspace, connect a supported Jira Data Center instance or import JSON, then configure projects, fields and workflow meaning before enabling reports.</p></div></section>}
+    {isOnboarding && <section className="panel onboarding-panel"><div className="onboarding-mark">A</div><div><span className="eyebrow">FROM DECISIONS TO DELIVERY</span><h2>Set up your Axiloom workspace</h2><p>Start with a local workspace, connect a supported Jira Data Center instance or import JSON, then configure projects, fields and workflow meaning before enabling reports. Optional steps depend on the modules you enable.</p></div>
+      <ol className="setup-checklist" aria-label="First-run setup steps">{setupSteps.map((step) => <li key={step.id}><button type="button" className={`setup-step${step.complete ? ' complete' : ''}${step.optional ? ' optional' : ''}`} onClick={() => focusSettingsSection(step.id)}><span className="setup-step-state" aria-hidden="true">{step.complete ? '✓' : step.optional ? '○' : '!'}</span><span><b>{step.label}</b><small>{step.complete ? 'Configured' : step.optional ? 'Optional for these modules' : 'Review during setup'}</small></span></button></li>)}</ol>
+    </section>}
+
+    <nav className="panel settings-index" aria-label="Settings sections">
+      <label className="form-field settings-search"><span>Find a settings section</span><input type="search" value={settingsQuery} onChange={(event) => setSettingsQuery(event.target.value)} placeholder="Search workspace, fields, workflow…" /></label>
+      <div className="settings-index-links">{visibleSettingsSections.map((section) => <button type="button" className="button tiny secondary" key={section.id} onClick={() => focusSettingsSection(section.id)}>{section.label}</button>)}{!visibleSettingsSections.length && <span className="field-hint">No settings sections match this search.</span>}</div>
+    </nav>
 
     {draft.migrationStatus === 'review-required' && <div className="callout amber"><b>Legacy profile needs review.</b><span>{draft.migrationWarnings.join(' ') || 'Confirm project roles, field mappings, workflow states and calendar before enabling analytics.'}</span></div>}
 
-    <section className="panel settings-panel">
+    <section id="settings-workspace" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Workspace" hint="Each workspace has a separate SQLite database, local records, credentials and report cache." />
       <div className="workspace-switcher">
         <label className="form-field"><span>Active workspace</span><select value={workspaceInfo?.id || ''} disabled={working === 'workspace'} onChange={(event) => activateWorkspace(event.target.value)}>{(workspaceInfo?.workspaces || []).map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}{workspace.active ? ' (active)' : ''}</option>)}</select></label>
@@ -290,15 +323,15 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       <label className="form-field"><span>Workspace name</span><input value={draft.workspaceName} onChange={(event) => update('workspaceName', event.target.value)} maxLength={200} /></label>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-organization" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Organization and display" hint="These values affect labels, dates and local calendar calculations. Source timestamps remain unchanged." />
       <div className="form-grid"><label className="form-field"><span>Organization name</span><input value={draft.organization.name} onChange={(event) => update('organization', { ...draft.organization, name: event.target.value })} /></label>
-        <label className="form-field"><span>Locale</span><select value={draft.organization.locale} onChange={(event) => update('organization', { ...draft.organization, locale: event.target.value })}><option value="en-US">English (United States)</option><option value="en-GB">English (United Kingdom)</option><option value="fa-IR">فارسی</option></select></label>
+        <label className="form-field"><span>UI and report locale</span><select value={draft.organization.locale} onChange={(event) => update('organization', { ...draft.organization, locale: event.target.value })}><option value="en-US">English (United States)</option><option value="en-GB">English (United Kingdom)</option><option value="fa-IR">فارسی</option></select><small>Controls date and number formats and text direction. English translation coverage is still in progress.</small></label>
         <label className="form-field"><span>Display timezone</span><input value={draft.organization.timeZone} onChange={(event) => update('organization', { ...draft.organization, timeZone: event.target.value, ...(draft.calendar.configured ? {} : { timeZone: event.target.value }) })} placeholder="Europe/Berlin" /></label>
       </div>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-connection" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Source connection" hint="Automatic sync is read-only. Issue mutations still require an explicit action and live Jira permission checks." />
       <div className="callout info"><LockKeyhole size={16} /><span>Supported here: HTTPS Jira Data Center with a personal access token, and offline Jira JSON imports. Jira Cloud OAuth is not implemented or claimed by this build.</span></div>
       {providerInfo && <p className="field-hint">{providerInfo.label} · {Object.entries(providerInfo.capabilities).filter(([, available]) => available).map(([capability]) => ({ fileImport: 'file import', projectDiscovery: 'project discovery', fieldDiscovery: 'field discovery', readOnlySync: 'read-only sync', userInitiatedWrites: 'permission-checked writes' }[capability] || capability)).join(' · ')}</p>}
@@ -323,14 +356,14 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       {workspaceInfo?.workspaces && <p className="field-hint">Source identity: {draft.sourceInstance.id || 'assigned before the first import'} · {draft.sourceInstance.provider}</p>}
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-projects" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Projects and roles" hint="Discover projects, select only those you intend to analyze, then assign logical roles. No project is built into Axiloom." />
       <div className="project-check-grid">{projects.map(([key, name]) => <label className="project-choice" key={key}><input type="checkbox" checked={draft.projects.includes(key)} onChange={(event) => update('projects', event.target.checked ? [...new Set([...draft.projects, key])] : draft.projects.filter((item) => item !== key))} /><span><b>{key}</b><small>{name}</small></span></label>)}</div>
       {!projects.length && <p className="empty-state">Discover Jira projects or add them after importing data.</p>}
       <div className="role-grid">{Object.entries({ productIntake: 'Product intake', technicalDelivery: 'Technical delivery', commitments: 'Commitments' }).map(([role, label]) => <fieldset key={role}><legend>{label}</legend>{draft.projects.map((project) => <label className="check-row" key={`${role}-${project}`}><input type="checkbox" checked={(draft.projectRoles[role] || []).includes(project)} onChange={(event) => updateRole(role, project, event.target.checked)} /><span>{project}</span></label>)}{!draft.projects.length && <small>Select projects first.</small>}</fieldset>)}</div>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-teams" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Teams and attribution" hint="Stable team IDs support hierarchy and effective dates. Precedence: issue override, team field, board, component, then project. Conflicts and exclusions stay visible." />
       <h3>Organization teams</h3>
       <div className="team-list">{draft.teams.map((team, index) => <div className="team-row team-registry-row" key={team.id}>
@@ -380,7 +413,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       </div>)}<button className="button secondary" onClick={addRoute} disabled={!draft.teams.length}><Plus size={14} /> Map a board</button></div>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-fields" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Semantic field mappings" hint="Map Jira fields to product meanings. Mapping changes create a configuration revision and rebuild derived projections; raw source snapshots stay unchanged." />
       <div className="mapping-list">{draft.fieldMappings.map((mapping, index) => {
         const semantic = semanticFields.find((item) => item.key === mapping.semanticKey);
@@ -396,7 +429,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       {!catalog?.fields?.value.length && <p className="field-hint">Connect to Jira and discover fields, or configure mappings from an offline JSON field catalog.</p>}
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-classifications" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Work and issue classifications" hint="Classification labels and targets are optional. Unmapped values remain unclassified and are shown as data quality gaps." />
       <div className="mapping-list">{draft.workClassifications.map((item, index) => <div className="mapping-row" key={item.id}>
         <label className="form-field"><span>Stable ID</span><input value={item.id} onChange={(event) => updateWorkClassification(index, { id: event.target.value })} /></label>
@@ -416,7 +449,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       <button className="button secondary" onClick={() => update('issueTypeClassifications', [...draft.issueTypeClassifications, { issueTypeId: '', classification: '' }])}><Plus size={14} /> Map an issue type</button>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-workflows" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Workflow semantics" hint="Map exact provider statuses to lifecycle roles for each project role. Completion categories and resolution dates are explicit policies; unknown current and historical statuses stay visible." />
       <div className="form-grid">{[
         ['delivery', 'Delivery', [['backlogStatuses', 'Backlog'], ['readyStatuses', 'Ready'], ['startedStatuses', 'Started'], ['blockedStatuses', 'Blocked'], ['reviewStatuses', 'Review'], ['completedStatuses', 'Delivered'], ['cancelledStatuses', 'Cancelled']]],
@@ -434,7 +467,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       </div>)}<button className="button secondary" onClick={() => updateMilestones(scope, [...(draft.workflows[scope]?.milestones || []), { id: `milestone-${crypto.randomUUID().slice(0, 8)}`, label: '', statuses: [] }])}><Plus size={14} /> Add milestone</button></fieldset>)}</div>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-calendar" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Calendar and capacity" hint="Working-day estimates stay unavailable until a calendar is configured. Source timestamps are never rewritten." />
       <label className="check-row"><input type="checkbox" checked={draft.calendar.configured} onChange={(event) => update('calendar', { ...draft.calendar, configured: event.target.checked })} /><span>Enable working calendar</span></label>
       <div className="form-grid"><label className="form-field"><span>Calendar timezone</span><input value={draft.calendar.timeZone} onChange={(event) => update('calendar', { ...draft.calendar, timeZone: event.target.value })} placeholder="Europe/Berlin" /></label><label className="form-field"><span>Hours per working day</span><input type="number" min={0.25} max={24} step={0.25} value={draft.calendar.hoursPerDay} onChange={(event) => update('calendar', { ...draft.calendar, hoursPerDay: Number(event.target.value) })} /></label></div>
@@ -449,7 +482,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       <label className="form-field"><span>Unplanned-work tag (exact match)</span><input value={draft.adhocTag} onChange={(event) => update('adhocTag', event.target.value)} placeholder="Configure a Jira label if applicable" /></label>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-capacity" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Capacity overrides" hint="Overrides use a stable team ID and person key. Set a sprint ID or an effective date range; the allocation applies when the sprint ends inside that range." />
       <div className="mapping-list">{draft.capacityOverrides.map((item, index) => <div className="mapping-row" key={`${item.teamId}-${item.sprintId}-${item.assigneeKey}-${item.activeFrom}-${index}`}>
         <label className="form-field"><span>Team</span><select value={item.teamId} onChange={(event) => update('capacityOverrides', draft.capacityOverrides.map((row, current) => current === index ? { ...row, teamId: event.target.value } : row))}><option value="">Select team</option>{draft.teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
@@ -465,25 +498,25 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       <button className="button secondary" onClick={() => update('capacityOverrides', [...draft.capacityOverrides, { teamId: '', sprintId: '', assigneeKey: '', assignee: '', activeFrom: '', activeTo: '', overrideWorkingDays: null, allocation: 1 }])}><Plus size={14} /> Add capacity override</button>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-modules" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Modules" hint="Enable modules only after their required project roles, fields and workflow policies are configured." />
       <div className="module-grid">{moduleFields.map((module) => <label className="module-choice" key={module.key}><input type="checkbox" checked={Boolean(draft.modules[module.key])} onChange={(event) => update('modules', { ...draft.modules, [module.key]: event.target.checked })} /><span><b>{module.label}</b><small>{module.description}</small></span></label>)}</div>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-templates" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Product record templates" hint="Configure register labels, fields, required values, enums, and typed record references. Templates accept data only; scripts and executable form logic are unsupported." />
       <label className="form-field full"><span>Template registry JSON</span><textarea className="template-registry-input" value={recordTemplateText} onChange={(event) => setRecordTemplateText(event.target.value)} spellCheck={false} rows={14} /></label>
       <p className="field-hint">Field types: text, textarea, date, enum, recordRef, issueRef, issueRefList, number, boolean. Record references must name configured template kinds.</p>
       <button className="button secondary" onClick={() => void applyRecordTemplates()} disabled={working === 'templates'}><Check size={14} />{working === 'templates' ? 'Validating templates…' : 'Validate template draft'}</button>
     </section>
 
-    <section className="panel settings-panel">
+    <section id="settings-recovery" tabIndex={-1} className="panel settings-panel">
       <SectionHeading title="Profiles, data and recovery" hint="Profile files exclude credentials. Backups belong to the active workspace and can be validated before restore." />
       <div className="settings-actions"><button className="button secondary" onClick={importProfile} disabled={working === 'profile'}><Upload size={15} /> Import profile (dry run)</button><button className="button secondary" onClick={exportProfile} disabled={working === 'profile'}><Download size={15} /> Export profile</button><button className="button secondary" onClick={backup} disabled={working === 'backup'}><ArchiveRestore size={15} /> Back up</button><button className="button secondary" onClick={restore} disabled={working === 'restore'}><ArchiveRestore size={15} /> Restore</button></div>
       <div className="sync-facts"><div><span>Current issues</span><b>{snapshot.summary.issueCount.toLocaleString()}</b></div><div><span>Sprints</span><b>{snapshot.summary.sprintCount.toLocaleString()}</b></div><div><span>Last import</span><b>{snapshot.importRuns[0]?.startedAt ? new Date(snapshot.importRuns[0].startedAt).toLocaleString(draft.organization.locale) : '—'}</b></div><div><span>Configuration revision</span><b>{draft.configurationRevision}</b></div></div>
       <p className="field-hint">Profile export contains organization labels, endpoint and mapping choices. Review the file before sharing it.</p>
     </section>
 
-    <div className="settings-savebar"><div><b>{draft.configurationRevision ? `Revision ${draft.configurationRevision}` : 'Unsaved configuration'}</b><small>Changes become active only after validation and save.</small></div><button className="button primary" onClick={saveSettings} disabled={working === 'save'}><Check size={16} />{working === 'save' ? 'Validating…' : 'Validate and save configuration'}</button></div>
+    <div id="settings-review" tabIndex={-1} className="settings-savebar"><div><b>{draft.configurationRevision ? `Revision ${draft.configurationRevision}` : 'Unsaved configuration'}</b><small>Changes become active only after validation and save.</small></div><button className="button primary" onClick={saveSettings} disabled={working === 'save'}><Check size={16} />{working === 'save' ? 'Validating…' : 'Validate and save configuration'}</button></div>
   </main>;
 }
