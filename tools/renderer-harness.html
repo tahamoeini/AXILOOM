@@ -33,7 +33,7 @@
           },
           calendar: { configured: false, timeZone: 'UTC', workingDays: [], hoursPerDay: 8, holidays: [], workIntervals: [] },
           modules: {
-            delivery: false,
+            delivery: true,
             portfolio: true,
             objectives: true,
             productIntelligence: true,
@@ -53,7 +53,6 @@
           capacityWarning: 0.9,
           capacityCritical: 1,
           adhocHoursWarning: 0.3,
-          unspecifiedOpTypeWarning: 0.1,
           capacityOverrides: [],
           stakeholderContactPoints: [],
         };
@@ -63,7 +62,7 @@
             relationCount: 0, unmappedTeamRelationCount: 0, warningCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null,
             openActions: 0, openRequests: 0, decisions: 0, outcomes: 0,
           },
-          teams: [], projects: [], sprintMetrics: [], people: [], issues: [], issueTotal: 0,
+          teams: ['Synthetic Team'], projects: [], sprintMetrics: [], people: [], issues: [], issueTotal: 0,
           epics: [], records: [], links: [],
           business: { summary: {}, issues: [], statuses: [], components: [], assignees: [], componentAssignees: [], agingBuckets: [], monthly: [], ageMethod: '' },
           jiraIssueLinks: [], localIssueLinks: [],
@@ -83,6 +82,27 @@
         snapshot.projects = ['ALPHA'];
         snapshot.issues = [syntheticIssue];
         snapshot.issueTotal = 1;
+        snapshot.sprintMetrics = [{
+          team: 'Synthetic Team', teamId: 'synthetic-team', teamPath: ['Synthetic Team'],
+          sprintId: 'synthetic-sprint-1', sprintName: 'Synthetic Sprint', state: 'closed', sprintOrder: 1,
+          startDate: '2026-02-01', endDate: '2026-02-14', calendarDays: 14, workingDays: 10,
+          scopeIssues: 2, scopeSP: 8, plannedIssues: 2, adhocIssues: 0, plannedSP: 8, adhocSP: 0,
+          committedSP: 8, completedIssues: 1, completedSP: 5, completedPlannedSP: 5, completedAdhocSP: 0,
+          scopeAddedSP: 0, scopeRemovedSP: 0, outgoingCarryoverIssues: 1, carryoverRateSP: 0.375,
+          loggedHours: 4, capacityHours: 40, utilization: 0.1, medianCycleTimeDays: 4,
+          reopenedIssueRate: 0, forecastPlannableSP: 5, forecastConfidence: 'low', forecastHistorySprints: 1,
+          forecastMethod: 'synthetic fixture', storyPointCoverage: 0.5, completedStoryPointCoverage: 1,
+          timeDataCoverage: 0.5, estimateAccuracyCoverage: 0.5, estimateAccuracy: 0.75,
+          scopeStability: 1,
+        }];
+        snapshot.people = [{
+          team: 'Synthetic Team', teamId: 'synthetic-team', teamPath: ['Synthetic Team'], assigneeKey: 'synthetic-owner',
+          assignee: 'Synthetic Owner', sprintId: 'synthetic-sprint-1', sprintName: 'Synthetic Sprint', sprintOrder: 1,
+          startDate: '2026-02-01', endDate: '2026-02-14', assignedIssues: 1, assignedSP: 5, completedIssues: 1,
+          completedSP: 5, plannedIssues: 1, adhocIssues: 0, outgoingCarryoverIssues: 0, loggedHours: 4,
+          capacityHours: 20, utilization: 0.2, medianCycleTimeDays: 4, estimateAccuracy: 0.75,
+          storyPointCoverage: 1, timeDataCoverage: 1, estimateAccuracyCoverage: 1,
+        }];
         const smoke = { config, snapshot, syntheticIssue, issueExports: [], issueListRequests: [], importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };
         const rememberIssueExport = (format, report) => {
           const rows = report?.sheets?.[0]?.rows || [];

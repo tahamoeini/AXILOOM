@@ -9,6 +9,9 @@ Semantic field coverage follows the project/type binding selected for each issue
 
 - Actual sprint windows use activation and completion timestamps when present. Active sprint windows are bounded by the present or configured sprint end. Planned start/end dates are used for capacity.
 - Completion is evaluated independently for delivery, intake, and commitment. Each role uses its configured completed statuses, selected Jira status categories, and optional resolution-date rule. An unscoped overview combines policies for roles assigned to the project; role-specific lists and metrics use only that role's policy. Category-only completion has no event timestamp, so cycle and lead-time calculations remain unavailable unless an exact status or dated resolution transition supplies one.
+- A sum over an empty cohort is zero. For a nonempty cohort, a measure with no observed values is unavailable (`null`); partial sums use observed values and include a coverage ratio. Story-point coverage, completed-point coverage, time-history coverage, and estimate-accuracy pair coverage are reported separately.
+- Estimate accuracy compares estimates and logged-time deltas only for the same completed issues with both values. Logged time is an estimate proxy from complete changelog evidence, not a true worklog; a cumulative `timespent` value without an attributable delta does not establish sprint hours.
+- Issue-type metrics use configured provider issue-type IDs and classification IDs. Unmapped types remain `unclassified`; the engine does not assume a built-in Bug, Feature, or other provider taxonomy.
 - Point-in-time field values are reconstructed from available changelog events. Incomplete history is flagged; reconstructed values are not presented as certain when evidence is missing.
 - Work classifications and tags are selected through configured mappings. Missing classifications remain unknown. Jira's Epic relationship, Jira issue links, and local product-record relationships are separate.
 
@@ -21,7 +24,7 @@ Semantic field coverage follows the project/type binding selected for each issue
 - Cycle time uses the configured start and completion status semantics. Lead time begins at issue creation.
 - Reopen rate counts issues that left a configured completion status within the sprint window.
 - Forecasts use the configured lookback and available completed sprint history. Coverage and fallback method are exposed with the result.
-- `timespent` history deltas are an estimate proxy, not Jira worklogs. Worklog detail is not inferred.
+- `timespent` history deltas are an estimate proxy, not Jira worklogs. Worklog detail is not inferred. Estimate accuracy uses matched estimate/time rows and exposes that pair coverage.
 
 ## Team attribution
 

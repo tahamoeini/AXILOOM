@@ -62,7 +62,6 @@ const DEFAULT_CONFIG = Object.freeze({
   capacityWarning: 0.9,
   capacityCritical: 1,
   adhocHoursWarning: 0.3,
-  unspecifiedOpTypeWarning: 0.1,
   capacityOverrides: [],
   stakeholderContactPoints: [],
 });
@@ -482,7 +481,7 @@ function validateConfig(input) {
     assert(config.projectRoles.productIntake.length > 0, 'Organization analytics needs an intake project.');
     assert(config.fieldMappings.some((binding) => binding.semanticKey === 'department'), 'Organization analytics needs a department field mapping.');
   }
-  for (const key of ['minForecastCoverage', 'minimumTimeDataCoverage', 'capacityWarning', 'capacityCritical', 'adhocHoursWarning', 'unspecifiedOpTypeWarning']) {
+  for (const key of ['minForecastCoverage', 'minimumTimeDataCoverage', 'capacityWarning', 'capacityCritical', 'adhocHoursWarning']) {
     const value = Number(config[key]);
     assert(Number.isFinite(value) && value >= 0 && value <= 1, `${key} must be between 0 and 1.`);
   }

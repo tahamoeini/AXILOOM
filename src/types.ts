@@ -209,7 +209,6 @@ export interface AppConfig {
   capacityWarning: number;
   capacityCritical: number;
   adhocHoursWarning: number;
-  unspecifiedOpTypeWarning: number;
   capacityOverrides: CapacityOverride[];
   stakeholderContactPoints: StakeholderContactPoint[];
   hasSavedPat?: boolean;

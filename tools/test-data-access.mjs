@@ -465,6 +465,78 @@ async function main() {
     'commitment-only category completion does not complete a delivery sprint relation');
   assert.equal(planDeliveryRelations.find((relation) => relation.issue.key === 'PLAN-3')?.completed, true,
     'delivery completion uses the delivery category configured for a multi-role project');
+
+  const baseMetricConfig = getConfig(businessDb);
+  const metricConfig = {
+    ...baseMetricConfig,
+    fieldMappings: [
+      { semanticKey: 'storyPoints', providerFieldId: 'customfield_points', projectKey: 'PLAN', transform: 'number' },
+      { semanticKey: 'sprint', providerFieldId: 'customfield_sprints', projectKey: 'PLAN', transform: 'id-list' },
+      { semanticKey: 'workClassification', providerFieldId: 'customfield_work_class', projectKey: 'PLAN', transform: 'text' },
+    ],
+    workClassifications: [
+      { id: 'defect', label: 'Defect', aliases: ['Incident'], minimumShare: null, maximumShare: null },
+      { id: 'feature', label: 'Feature', aliases: [], minimumShare: null, maximumShare: null },
+    ],
+    issueTypeClassifications: [
+      { issueTypeId: 'type-defect', classification: 'defect' },
+      { issueTypeId: 'type-feature', classification: 'feature' },
+    ],
+    workflows: {
+      ...baseMetricConfig.workflows,
+      delivery: { ...baseMetricConfig.workflows.delivery, startedStatuses: ['In Progress'], completedStatuses: ['Done'], completionStatusCategories: ['done'], resolutionCompletes: false },
+    },
+  };
+  const metricIssue = (id, issueClass, points, estimateSeconds, timeSpentSeconds, histories) => ({
+    id: String(id), key: `PLAN-${id}`,
+    fields: {
+      project: { id: 'project-plan', key: 'PLAN', name: 'Plan' },
+      issuetype: { id: `type-${issueClass}`, name: issueClass === 'defect' ? 'Incident' : 'Capability' },
+      summary: `Synthetic ${issueClass}`, status: { name: 'Done', statusCategory: { key: 'done' } },
+      assignee: { key: 'person-1', name: 'person-1', displayName: 'Person One' },
+      created: '2026-02-01T00:00:00.000Z', updated: '2026-02-10T00:00:00.000Z', resolutiondate: null,
+      customfield_points: points, customfield_sprints: ['301'],
+      customfield_work_class: issueClass === 'defect' ? 'Incident' : 'Feature',
+      timeoriginalestimate: estimateSeconds, timespent: timeSpentSeconds,
+    },
+    changelog: { startAt: 0, total: histories.length, historyComplete: true, histories },
+  });
+  const missingTimeAndPoints = metricIssue(60, 'defect', null, 10800, 7200, [
+    { id: 'metric-60-status', created: '2026-02-08T12:00:00.000Z', items: [{ field: 'status', fromString: 'In Progress', toString: 'Done' }] },
+  ]);
+  const fullyMappedFeature = metricIssue(61, 'feature', 3, 7200, 3600, [
+    { id: 'metric-61-time', created: '2026-02-05T12:00:00.000Z', items: [{ field: 'timespent', from: '0', fromString: '0', to: '3600', toString: '3600' }] },
+    { id: 'metric-61-status', created: '2026-02-08T12:00:00.000Z', items: [{ field: 'status', fromString: 'In Progress', toString: 'Done' }] },
+  ]);
+  const unavailableMetrics = calculateMetrics([missingTimeAndPoints], [planSprint], metricConfig);
+  const unavailableScope = unavailableMetrics.sprintMetrics[0].scope;
+  assert.equal(unavailableScope.scopeSP, null, 'a nonempty scope with no mapped points is unavailable, not zero');
+  assert.equal(unavailableScope.completedSP, null, 'completed points remain unavailable when no completed issue has a mapped value');
+  assert.equal(unavailableScope.storyPointCoverage, 0);
+  assert.equal(unavailableScope.loggedHours, null, 'a cumulative timespent value without a delta cannot stand in for sprint hours');
+  assert.equal(unavailableScope.timeDataCoverage, 0);
+  assert.equal(unavailableScope.estimateAccuracy, null, 'estimate accuracy is unavailable when no issue has reliable logged-time evidence');
+  assert.equal(unavailableScope.issueClassMetrics.defect.loggedHours, null, 'configured issue-class metrics preserve missing time evidence');
+  assert.equal(unavailableScope.classificationResults.find((item) => item.id === 'defect').hours, null,
+    'classification hours do not convert unavailable time data to zero');
+
+  const mixedMetricScope = calculateMetrics([missingTimeAndPoints, fullyMappedFeature], [planSprint], metricConfig).sprintMetrics[0].scope;
+  assert.equal(mixedMetricScope.scopeSP, 3, 'partial totals sum observed points while exposing coverage');
+  assert.equal(mixedMetricScope.storyPointCoverage, 0.5);
+  assert.equal(mixedMetricScope.loggedHours, 1, 'only rows with reliable changelog deltas contribute to the proxy total');
+  assert.equal(mixedMetricScope.timeDataCoverage, 0.5);
+  assert.equal(mixedMetricScope.estimateAccuracy, 0.5, 'estimate accuracy compares the same issue rows on both sides');
+  assert.equal(mixedMetricScope.estimateAccuracyCoverage, 0.5);
+  assert.deepEqual(Object.keys(mixedMetricScope.issueClassMetrics).sort(), ['defect', 'feature'],
+    'issue-class metrics use the independent configured taxonomy');
+  assert.equal(mixedMetricScope.issueClassMetrics.feature.storyPoints, 3);
+  assert.equal(mixedMetricScope.issueClassMetrics.feature.loggedHours, 1);
+  assert.equal(mixedMetricScope.issueClassMetrics.defect.storyPoints, null);
+  const definitions = require('../src/data/metric-definitions.json');
+  assert.ok(definitions.every((definition) => definition.formula && definition.caveat && definition.source),
+    'each metric definition retains a formula, a caveat, and an evidence source');
+  assert.equal(definitions.some((definition) => /\bBug\b|default Done and Review/i.test([definition.title, definition.formula, definition.caveat].join(' '))), false,
+    'metric definitions do not impose a Jira issue-type or completion-status taxonomy');
   assert.equal(businessReport.unmapped.count, 0);
   businessDb.close();
 }

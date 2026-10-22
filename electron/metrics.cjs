@@ -262,6 +262,10 @@ function sumZero(rows, getter) {
   return rows.reduce((sum, row) => sum + (Number(getter(row)) || 0), 0);
 }
 
+function sumMeasure(rows, getter) {
+  return rows.length ? sumKnown(rows, getter) : 0;
+}
+
 function makeRelation(issue, sprint, interval, config) {
   const overlapping = interval.filter(([start, end]) => end > sprint.window.startMs && start < sprint.window.endMs);
   if (!overlapping.length) return null;
@@ -332,6 +336,9 @@ function makeRelation(issue, sprint, interval, config) {
   const historyComplete = changelog.historyComplete === undefined
     ? Boolean(hasHistoryTotal) && historyTotal <= currentHistoryCount + Number(changelog.startAt || 0)
     : Boolean(changelog.historyComplete);
+  const timeEvents = eventsFor(issue, 'timespent');
+  const hasCompleteTimeEventValues = timeEvents.length > 0 && timeEvents.every((event) => numberOrNull(event.to) !== null || numberOrNull(event.toString) !== null);
+  const hasReliableTimeData = historyComplete && (hasCompleteTimeEventValues || timeSpent === 0);
   return {
     id: `${issue.key}|${sprint.id}`,
     issue,
@@ -387,7 +394,7 @@ function makeRelation(issue, sprint, interval, config) {
     cycleTimeDays: firstInProgress && completedAt !== null ? Math.max(0, (completedAt - firstInProgress.timeMs) / 86400000) : null,
     leadTimeDays: issue.createdMs !== null && completedAt !== null ? Math.max(0, (completedAt - issue.createdMs) / 86400000) : null,
     reopenedCount,
-    hasReliableTimeData: timeSpent !== null || eventsFor(issue, 'timespent').length > 0,
+    hasReliableTimeData,
     historyComplete,
     tagAtEnd,
   };
@@ -407,9 +414,9 @@ function scoreBundle(rows, sprint, config = {}) {
   const outgoing = rows.filter((row) => row.outgoing);
   const added = rows.filter((row) => row.added);
   const removed = rows.filter((row) => row.removed);
-  const points = (subset, atEnd = false) => sumZero(subset, (row) => atEnd ? row.storyPointsAtEnd : row.storyPointsAtEntry);
-  const estimateHours = (subset) => sumZero(subset, (row) => (row.estimateSecondsAtEntry || 0) / 3600);
-  const loggedHours = (subset) => sumZero(subset, (row) => row.loggedSeconds / 3600);
+  const points = (subset, atEnd = false) => sumMeasure(subset, (row) => atEnd ? row.storyPointsAtEnd : row.storyPointsAtEntry);
+  const estimateHours = (subset) => sumMeasure(subset, (row) => row.estimateSecondsAtEntry === null ? null : row.estimateSecondsAtEntry / 3600);
+  const loggedHours = (subset) => sumMeasure(subset, (row) => row.hasReliableTimeData ? row.loggedSeconds / 3600 : null);
   const plannedSP = points(planned);
   const adhocSP = points(adhoc);
   const scopeSP = points(rows);
@@ -427,9 +434,9 @@ function scoreBundle(rows, sprint, config = {}) {
   const paired = completed.filter((row) => row.estimateSecondsAtEntry !== null && row.hasReliableTimeData);
   const pairedEstimate = estimateHours(paired);
   const pairedActual = loggedHours(paired);
-  const accuracyDenominator = completedEstimates === null || completedLogged === null ? 0 : Math.max(completedEstimates, completedLogged);
-  const estimateAccuracy = accuracyDenominator > 0 && completedEstimates > 0 && completedLogged > 0
-    ? Math.min(completedEstimates, completedLogged) / accuracyDenominator : null;
+  const accuracyDenominator = pairedEstimate === null || pairedActual === null ? 0 : Math.max(pairedEstimate, pairedActual);
+  const estimateAccuracy = accuracyDenominator > 0 && pairedEstimate > 0 && pairedActual > 0
+    ? Math.min(pairedEstimate, pairedActual) / accuracyDenominator : null;
   const plannedPaired = completedPlanned.filter((row) => row.estimateSecondsAtEntry !== null && row.hasReliableTimeData);
   const adhocPaired = completedAdhoc.filter((row) => row.estimateSecondsAtEntry !== null && row.hasReliableTimeData);
   const plannedBiasEstimateHours = estimateHours(plannedPaired);
@@ -443,13 +450,10 @@ function scoreBundle(rows, sprint, config = {}) {
     .map((row) => (row.sprint.window.endMs - row.issue.createdMs) / 86400000)
     .filter((age) => Number.isFinite(age) && age >= 0);
   const workClassifications = Array.isArray(config.workClassifications) ? config.workClassifications : [];
-  const classificationHours = Object.fromEntries(workClassifications.map((classification) => [classification.id, 0]));
-  let unclassifiedHours = 0;
-  rows.forEach((row) => {
-    const hours = row.loggedSeconds / 3600;
-    if (Object.hasOwn(classificationHours, row.workClassification)) classificationHours[row.workClassification] += hours;
-    else unclassifiedHours += hours;
-  });
+  const workClassificationIds = new Set(workClassifications.map((classification) => classification.id));
+  const classificationHours = Object.fromEntries(workClassifications.map((classification) => [classification.id,
+    loggedHours(rows.filter((row) => row.workClassification === classification.id))]));
+  const unclassifiedHours = loggedHours(rows.filter((row) => !workClassificationIds.has(row.workClassification)));
   const allLogged = loggedHours(rows);
   const plannedLogged = loggedHours(planned);
   const adhocLogged = loggedHours(adhoc);
@@ -458,6 +462,8 @@ function scoreBundle(rows, sprint, config = {}) {
   const timeDataCoverage = safeDiv(timeCoverage, rows.length);
   const spCoverage = rows.filter((row) => row.storyPointsAtEntry !== null).length;
   const estimateCoverage = rows.filter((row) => row.estimateSecondsAtEntry !== null).length;
+  const completedStoryPointCoverage = safeDiv(completed.filter((row) => row.storyPointsAtEnd !== null).length, completed.length);
+  const estimateAccuracyCoverage = safeDiv(paired.length, completed.length);
   const issueClassMetrics = Object.fromEntries(Array.from(new Set(rows.map((row) => row.issueClass))).map((classId) => [classId, {
     issues: rows.filter((row) => row.issueClass === classId).length,
     storyPoints: points(rows.filter((row) => row.issueClass === classId)),
@@ -473,7 +479,7 @@ function scoreBundle(rows, sprint, config = {}) {
   const requiredHealth = [plannedDeliveryRate, scopeCompletionRate, carryoverRate, scopeStability, reopenedIssueRate].every((value) => value !== null);
   const utilization = safeDiv(allLogged, capacityHours);
   const classificationResults = workClassifications.map((classification) => {
-    const hours = classificationHours[classification.id] || 0;
+    const hours = classificationHours[classification.id] ?? null;
     const shareOfLoggedTime = safeDiv(hours, allLogged);
     const shareOfCapacity = safeDiv(hours, capacityHours);
     const minimumShare = classification.minimumShare == null ? null : Number(classification.minimumShare);
@@ -508,8 +514,6 @@ function scoreBundle(rows, sprint, config = {}) {
   const completedEstimateHours = completedEstimates;
   const hoursPerScopeSP = safeDiv(allLogged, scopeSP);
   const averageHoursPerCompletedSP = safeDiv(completedLogged, completedSP);
-  const developmentProtectionRateRaw = null;
-
   return {
     scopeIssues: rows.length, scopeSP, plannedIssues: planned.length, plannedSP, adhocIssues: adhoc.length, adhocSP,
     committedIssues: committed.length, committedSP, scopeAddedIssues: added.length, scopeAddedSP: addedSP,
@@ -532,10 +536,11 @@ function scoreBundle(rows, sprint, config = {}) {
     oldestOpenCarryoverAgeDays: unfinishedAges.length ? Math.max(...unfinishedAges) : null,
     scopeChurnRate, scopeStability: bounded(scopeStability), loggedHours: allLogged, scopeLoggedHours: allLogged,
     negativeTimeAdjustmentCount: negativeTimeAdjustments, negativeTimeAdjustments, capacityHours, utilization, capacityLoad: utilization,
-    capacityStatus, remainingEstimateHoursAtEnd: sumZero(rows, (row) => (row.remainingSecondsAtEnd || 0) / 3600),
-    timeSpentHoursAtEnd: sumZero(rows, (row) => (row.timeSpentSecondsAtEnd || 0) / 3600),
-    originalEstimateHours: estimateHours(rows), estimateConsumed: safeDiv(completedLogged, completedEstimates), storyPointCoverage: safeDiv(spCoverage, rows.length), spEstimatedIssues: spCoverage,
-    estimateCoverage: safeDiv(estimateCoverage, rows.length), timeDataCoverage,
+    capacityStatus, remainingEstimateHoursAtEnd: sumMeasure(rows, (row) => row.remainingSecondsAtEnd === null ? null : row.remainingSecondsAtEnd / 3600),
+    timeSpentHoursAtEnd: sumMeasure(rows, (row) => row.timeSpentSecondsAtEnd === null ? null : row.timeSpentSecondsAtEnd / 3600),
+    originalEstimateHours: estimateHours(rows), estimateConsumed: safeDiv(completedLogged, completedEstimates), storyPointCoverage: safeDiv(spCoverage, rows.length),
+    completedStoryPointCoverage, spEstimatedIssues: spCoverage,
+    estimateCoverage: safeDiv(estimateCoverage, rows.length), estimateAccuracyCoverage, timeDataCoverage,
     averageCycleTimeDays: average(cycleTimes), medianCycleTimeDays: median(cycleTimes),
     cycleTimeP75Days: percentile(cycleTimes, 0.75), cycleTimeP85Days: percentile(cycleTimes, 0.85),
     averageLeadTimeDays: average(leadTimes), medianLeadTimeDays: median(leadTimes), leadTimeP85Days: percentile(leadTimes, 0.85),
@@ -555,26 +560,14 @@ function scoreBundle(rows, sprint, config = {}) {
     completedPlannedEstimateHours: estimateHours(completedPlanned), completedAdhocEstimateHours: estimateHours(completedAdhoc),
     completedPlannedLoggedHours: loggedHours(completedPlanned), completedAdhocLoggedHours: loggedHours(completedAdhoc),
     completedEstimateHours, completedLoggedHours,
-    bugIssues: null, bugSP: null, bugLoggedHours: null, bugShareIssues: null, bugShareSP: null, bugShareHours: null,
-    completedBugIssues: null, completedBugSP: null, bugCompletionRateIssues: null, bugCompletionRateSP: null,
-    normalIssues: null, normalSP: null, normalLoggedHours: null, normalShareIssues: null, normalShareSP: null, normalShareHours: null,
-    completedNormalIssues: null, completedNormalSP: null, normalCompletionRateIssues: null, normalCompletionRateSP: null,
     issueClassMetrics,
     classificationHours, classificationResults, unclassifiedHours,
     classificationCoverage: rows.length ? classifiedRows.length / rows.length : null,
-    devLoggedHours: null, opLoggedHours: null, regLoggedHours: null, regulatoryLoggedHours: null,
-    unspecifiedLoggedHours: unclassifiedHours, unspecifiedOpTypeLoggedHours: null,
-    devWorkMixShare: null, opWorkMixShare: null, regWorkMixShare: null, regulatoryWorkMixShare: null,
-    unspecifiedWorkMixShare: safeDiv(unclassifiedHours, allLogged),
-    unspecifiedOpTypeIssueShare: null, unspecifiedOpTypeHoursShare: safeDiv(unclassifiedHours, allLogged),
-    devCapacityShare: null, opCapacityShare: null, regCapacityShare: null, regulatoryCapacityShare: null, unspecifiedCapacityShare: safeDiv(unclassifiedHours, capacityHours),
-    developmentShortfall: null, operationExcess: null, regulatoryExcess: null,
-    developmentProtectionRateRaw,
-    developmentProtectionRate: null,
-    operationCapConsumption: null, regulatoryCapConsumption: null,
+    unclassifiedLoggedHours: unclassifiedHours,
+    unclassifiedWorkMixShare: safeDiv(unclassifiedHours, allLogged),
+    unclassifiedCapacityShare: safeDiv(unclassifiedHours, capacityHours),
     allocationStatus, capacityTargets: classificationResults.map(({ id, label, minimumShare, maximumShare }) => ({ id, label, minimumShare, maximumShare })),
     adhocHoursWarningThreshold: Number(config.adhocHoursWarning ?? 0.3),
-    unspecifiedOpTypeWarningThreshold: Number(config.unspecifiedOpTypeWarning ?? 0.1),
     issuesWithoutAssignee: rows.filter((row) => !getAssigneeKey(row.assignee)).length,
     completedIssuesWithoutSP: completedWithoutSP, completedIssuesWithoutStoryPoints: completedWithoutSP,
     completedIssuesWithoutEstimate: completedWithoutEstimate, completedIssuesWithoutEstimates: completedWithoutEstimate,
@@ -1068,8 +1061,7 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const sprintMetadata = sprintMetadataByKey.get(`${first.team}|${first.sprint.id}`);
     const capacity = personCapacity.get(`${first.team}|${first.sprint.id}|${getAssigneeKey(first.assignee)}`)?.capacityHours ?? null;
     const scope = scoreBundle(rows, { capacityHours: capacity }, config);
-    ['developmentShortfall', 'operationExcess', 'regulatoryExcess', 'developmentProtectionRateRaw', 'developmentProtectionRate',
-      'operationCapConsumption', 'regulatoryCapConsumption', 'allocationStatus', 'capacityTargets'].forEach((key) => { delete scope[key]; });
+    ['allocationStatus', 'capacityTargets'].forEach((key) => { delete scope[key]; });
     personMetrics.push({
       team: first.team,
       teamId: first.teamId || config.teams.find((candidate) => candidate.name === first.team)?.id || '',
