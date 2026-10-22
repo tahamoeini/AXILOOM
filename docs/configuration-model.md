@@ -4,7 +4,9 @@ Axiloom starts with an unconfigured, organization-neutral workspace. It does not
 
 ## Profile structure
 
-Profiles use [`config-profile.schema.json`](../schemas/config-profile.schema.json) and are validated again in the Electron main process. The persisted record has a schema version and an incrementing configuration revision. Each semantic change creates an immutable revision and a fingerprint used by report-cache keys.
+The current profile shape is documented in [`config-profile.schema.json`](../schemas/config-profile.schema.json). Runtime validation in the Electron main process enforces field and cross-field rules before persistence. The persisted record has a schema version and an incrementing configuration revision. Each semantic change creates an immutable revision and a fingerprint used by report-cache keys.
+
+Runtime validation treats missing versions as legacy input and migrates them to the current schema. Malformed, fractional, negative, and newer-than-supported versions are rejected before normalization; a profile import remains a draft until the user reviews it and saves it.
 
 The profile contains:
 

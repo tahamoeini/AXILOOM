@@ -80,7 +80,15 @@ function stableLegacySourceId(endpoint) {
 
 function normalizeConfig(input = {}) {
   if (!isRecord(input)) throw new Error('Configuration must be an object.');
-  const legacy = Number(input.schemaVersion || 0) < CONFIG_SCHEMA_VERSION;
+  const hasSchemaVersion = Object.hasOwn(input, 'schemaVersion');
+  const inputSchemaVersion = hasSchemaVersion ? input.schemaVersion : 0;
+  if (hasSchemaVersion && (typeof inputSchemaVersion !== 'number' || !Number.isSafeInteger(inputSchemaVersion) || inputSchemaVersion < 0)) {
+    throw new Error('Configuration schema version must be a non-negative integer.');
+  }
+  if (inputSchemaVersion > CONFIG_SCHEMA_VERSION) {
+    throw new Error(`Configuration schema version ${inputSchemaVersion} is newer than the supported version ${CONFIG_SCHEMA_VERSION}.`);
+  }
+  const legacy = inputSchemaVersion < CONFIG_SCHEMA_VERSION;
   const sourceTeams = Array.isArray(input.teams) ? input.teams : [];
   const teams = sourceTeams.filter(isRecord).map((team) => ({
     id: asString(team.id, 80),

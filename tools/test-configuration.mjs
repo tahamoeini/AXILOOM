@@ -13,6 +13,16 @@ assert.deepEqual(DEFAULT_CONFIG.teams, []);
 assert.deepEqual(DEFAULT_CONFIG.fieldMappings, []);
 assert.equal(DEFAULT_CONFIG.calendar.configured, false);
 assert.equal(DEFAULT_CONFIG.modules.businessSprint, false);
+assert.throws(() => validateConfig({ schemaVersion: 2 }), /newer than the supported version 1/,
+  'profiles from a newer schema must fail instead of being downgraded');
+assert.throws(() => validateConfig({ schemaVersion: 1.5 }), /non-negative integer/,
+  'fractional schema versions must fail validation');
+assert.throws(() => validateConfig({ schemaVersion: '1' }), /non-negative integer/,
+  'string schema versions must fail validation');
+assert.throws(() => validateConfig({ schemaVersion: null }), /non-negative integer/,
+  'null schema versions must fail validation');
+assert.throws(() => validateConfig({ schemaVersion: 'unknown' }), /non-negative integer/,
+  'nonnumeric schema versions must fail validation');
 
 const profile = validateConfig({
   schemaVersion: 1,

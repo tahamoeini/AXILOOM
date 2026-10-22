@@ -69,10 +69,32 @@
           quality: { findings: [], fieldCoverage: {}, unknownFields: [], incompleteHistories: 0, issuesWithoutHistory: 0, conflicts: 0, evidence: { issueRevisions: 0, issueHistoryEvents: 0, sprintRevisions: 0, localLinkEvents: 0 } },
           importRuns: [],
         };
-        window.__AXILOOM_SMOKE__ = { config, snapshot };
+        const smoke = { config, snapshot, importCalls: 0, exportCalls: 0, saveCalls: 0, confirmations: [] };
+        window.__AXILOOM_SMOKE__ = smoke;
+        window.confirm = (message) => { smoke.confirmations.push(String(message)); return true; };
         window.axiloom = {
           getSnapshot: async () => snapshot,
           getConfig: async () => config,
+          getWorkspaceInfo: async () => ({
+            id: 'default', name: config.workspaceName, path: 'synthetic-fixture', warning: '',
+            workspaces: [{ id: 'default', name: config.workspaceName, active: true, path: 'synthetic-fixture', createdAt: '2026-01-01T00:00:00.000Z' }],
+          }),
+          getConfigurationHistory: async () => [],
+          validateConfig: async (value) => value,
+          saveConfig: async (value) => {
+            smoke.saveCalls += 1;
+            Object.assign(config, value, { configurationRevision: Number(config.configurationRevision || 0) + 1 });
+            return config;
+          },
+          importConfigProfile: async () => {
+            smoke.importCalls += 1;
+            return {
+              canceled: false,
+              dryRun: true,
+              profile: { ...structuredClone(config), organization: { ...config.organization, name: 'Imported synthetic profile' } },
+            };
+          },
+          exportConfigProfile: async () => { smoke.exportCalls += 1; return { canceled: false, filePath: 'synthetic-fixture-profile.json' }; },
           getCurrentUser: async () => null,
           getIssueOverviewStats: async () => ({ issueCount: 0, openCount: 0, epicLinkedCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null, projectCounts: [] }),
           listIssues: async () => ({ issues: [], total: 0 }),
