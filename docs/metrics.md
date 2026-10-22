@@ -40,6 +40,12 @@ Working time uses the configured time zone, weekday mask, holidays, and daily in
 
 Portfolio and product views use configured project roles and explicit issue keys or record relationships. Product links are not inferred from title similarity. Multiple team/component memberships can make subtotals overlap; totals are not necessarily unique issue counts. Product-to-delivery summaries show the available evidence and retain the relationship source.
 
+## Report filters and exported context
+
+XLSX and PDF exports include a Report Context section with the active workspace, organization label, source provider and instance ID, configuration revision, report-engine fingerprint, app version, locale, timezone, UTC generation time, filter semantics, active filter values, included/matching row counts, workspace-level quality counts, and interpretation notes. The context uses the configuration active when the export is saved.
+
+Each report view marks whether filters apply to the whole report or only the active tab/view. Workspace quality counts remain explicitly workspace-wide unless a page implements a matching filtered diagnostic. Exported metric rows and their summary values are built from the same report-filtered rows; partial metric coverage remains visible, and a missing measure is not exported as zero.
+
 ## Interpretation
 
 Missing denominators produce a blank ratio. Incomplete history and field coverage are displayed as quality limits. Employee measures are workload and flow diagnostics, not standalone performance decisions. Definitions shipped in `src/data/metric-definitions.json` are being generalized and reviewed; do not treat a renderer build as proof of parity with an external organization's historical reports.

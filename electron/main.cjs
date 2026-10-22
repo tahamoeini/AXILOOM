@@ -1,13 +1,14 @@
 const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
 const { Worker } = require('node:worker_threads');
 const { DatabaseSync } = require('node:sqlite');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { openDatabase, getConfig, saveConfig, saveIssue, saveSprint, saveLocalIssueLink, removeLocalIssueLink, saveRecordRelationship, listRecordRelationships, archiveRecordRelationship, getIssueDetails, getIssueActivity, getSprintDetails, listIssues, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport, getBusinessBoardReport } = require('./database.cjs');
 const { sourceIdentityKey } = require('./configuration.cjs');
 const { createOfflineAdapter, createProviderAdapter, describeProvider, parseJiraBaseUrl } = require('./jira-providers.cjs');
 const { writeWorkbook } = require('./xlsx.cjs');
+const { attachReportContext } = require('./reporting.cjs');
 const workspaceRegistry = require('./workspaces.cjs');
 
 let db;
@@ -655,14 +656,15 @@ function registerHandlers() {
   ipcMain.handle('reports:xlsx', async (_event, report) => {
     const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, { title: 'خروجی Excel', defaultPath: `${report.fileName || 'Axiloom'}.xlsx`, filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }] });
     if (canceled || !filePath) return { canceled: true };
-    writeWorkbook(filePath, report.sheets || []);
+    const prepared = prepareReportExport(report);
+    writeWorkbook(filePath, prepared.sheets || []);
     return { filePath };
   });
   ipcMain.handle('reports:pdf', async (_event, report) => {
     const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, { title: 'خروجی PDF', defaultPath: `${report.fileName || 'Axiloom'}.pdf`, filters: [{ name: 'PDF document', extensions: ['pdf'] }] });
     if (canceled || !filePath) return { canceled: true };
     const printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
-    const html = createReportHtml({ ...report, locale: getConfig(db).organization.locale });
+    const html = createReportHtml({ ...prepareReportExport(report), locale: getConfig(db).organization.locale });
     const temporaryHtml = path.join(workspaceDirectory, `report-${randomUUID()}.html`);
     try {
       await fs.promises.writeFile(temporaryHtml, html, 'utf8');
@@ -768,6 +770,30 @@ function registerHandlers() {
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
+
+function reportEngineFingerprint() {
+  const hash = createHash('sha256');
+  for (const file of ['snapshot.cjs', 'metrics.cjs', 'semantic-mapping.cjs', 'team-attribution.cjs', 'database.cjs']) {
+    hash.update(fs.readFileSync(path.join(__dirname, file)));
+  }
+  return `sha256:${hash.digest('hex')}`;
+}
+
+function prepareReportExport(report) {
+  const config = getConfig(db);
+  return attachReportContext(report, {
+    workspaceName: activeWorkspace?.name || config.workspaceName,
+    organizationName: config.organization?.name,
+    sourceProvider: config.sourceInstance?.provider,
+    sourceId: config.sourceInstance?.id,
+    configurationRevision: config.configurationRevision,
+    engineFingerprint: reportEngineFingerprint(),
+    appVersion: app.getVersion(),
+    locale: config.organization?.locale,
+    timeZone: config.calendar?.timeZone || config.organization?.timeZone,
+    generatedAt: new Date().toISOString(),
+  });
 }
 
 function createReportHtml(report) {

@@ -357,7 +357,28 @@ export interface ExportReport {
   fileName: string;
   title: string;
   subtitle?: string;
+  scope?: ReportScope;
   sheets: Array<{ name: string; rows: Array<Array<string | number | boolean | null>> }>;
+}
+
+export type ReportFilterSemantics = 'report-wide' | 'active-tab' | 'view-specific' | 'unspecified';
+export interface ReportScope {
+  view: string;
+  semantics: ReportFilterSemantics;
+  filters: Array<{ label: string; value: string }>;
+  primaryRowCount: number | null;
+  matchingRowCount: number | null;
+  quality: { scope: 'workspace'; warningCount: number; infoCount: number; incompleteHistories: number; conflicts: number };
+  notes: string[];
+}
+export interface ReportScopeInput {
+  view: string;
+  semantics?: ReportFilterSemantics;
+  filters?: object;
+  filterLabels?: Record<string, string>;
+  primaryRowCount?: number | null;
+  matchingRowCount?: number | null;
+  notes?: string[];
 }
 
 declare global {

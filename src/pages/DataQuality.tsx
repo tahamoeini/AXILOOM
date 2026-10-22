@@ -1,6 +1,8 @@
-import { AlertTriangle, CheckCircle2, CircleHelp, Database, FileWarning, History, ShieldAlert } from 'lucide-react';
-import type { AppConfig, Snapshot } from '../types';
+import { AlertTriangle, CheckCircle2, CircleHelp, Database, Download, FileDown, FileWarning, History, ShieldAlert } from 'lucide-react';
+import { useState } from 'react';
+import type { AppConfig, ExportReport, Snapshot } from '../types';
 import { DataTable, MetricCard, SectionHeading, StatusBadge, formatDate, formatNumber } from '../components/Primitives';
+import { createReportScope } from '../reporting';
 
 const SEMANTIC_LABELS: Record<string, string> = {
   storyPoints: 'Story points', sprint: 'Sprint membership', epicLink: 'Parent or epic link', epicName: 'Epic name',
@@ -9,9 +11,33 @@ const SEMANTIC_LABELS: Record<string, string> = {
 };
 
 export default function DataQuality({ snapshot, config }: { snapshot: Snapshot; config: AppConfig | null }) {
+  const [exportError, setExportError] = useState('');
   const warnings = snapshot.quality.findings.filter((finding) => finding.severity === 'warning');
   const infos = snapshot.quality.findings.filter((finding) => finding.severity !== 'warning');
+  async function exportQuality(format: 'xlsx' | 'pdf') {
+    const report: ExportReport = {
+      fileName: 'Axiloom-data-quality', title: 'Data quality and evidence coverage',
+      subtitle: `${formatNumber(snapshot.summary.issueCount, 0)} imported issues · quality counts apply to this workspace.`,
+      scope: createReportScope(snapshot, {
+        view: 'Data quality', semantics: 'view-specific', primaryRowCount: snapshot.quality.findings.length,
+        matchingRowCount: snapshot.summary.issueCount,
+        notes: ['Coverage, findings, evidence counts, and import runs are workspace-level and are not filterable by report date or project.'],
+      }),
+      sheets: [
+        { name: 'Findings', rows: [['Severity', 'Code', 'Count', 'Interpretation'], ...snapshot.quality.findings.map((finding) => [finding.severity, finding.code, finding.count, finding.message])] },
+        { name: 'Field Coverage', rows: [['Field', 'Returned', 'Present', 'Invalid', 'Empty string', 'Null', 'Empty array', 'Missing', 'Unmapped'], ...Object.entries(snapshot.quality.fieldCoverage).map(([field, coverage]) => [field, coverage.returned, coverage.present, coverage.invalid, coverage.emptyString, coverage.null, coverage.emptyArray, coverage.missing, coverage.unmapped])] },
+        { name: 'Evidence', rows: [['Evidence type', 'Count'], ['Issue revisions', snapshot.quality.evidence.issueRevisions], ['Changelog events', snapshot.quality.evidence.issueHistoryEvents], ['Sprint revisions', snapshot.quality.evidence.sprintRevisions], ['Local link events', snapshot.quality.evidence.localLinkEvents], ['Product relationship events', snapshot.quality.evidence.recordRelationshipEvents], ['Incomplete histories', snapshot.quality.incompleteHistories], ['Issues without history', snapshot.quality.issuesWithoutHistory], ['Conflicts', snapshot.quality.conflicts], ['Unknown fields', snapshot.quality.unknownFields.length], ['Unmapped issue-sprint relationships', snapshot.summary.unmappedTeamRelationCount]] },
+        { name: 'Import Runs', rows: [['Started', 'Finished', 'Files or source', 'Added', 'Updated', 'Duplicates', 'Conflicts', 'Sprints added', 'Sprints updated', 'Skipped'], ...snapshot.importRuns.map((run) => [run.startedAt || '', run.finishedAt || '', Array.isArray(run.files) ? run.files.join(', ') : 'Jira', run.issuesAdded || 0, run.issuesUpdated || 0, run.duplicates || 0, run.conflicts || 0, run.sprintsAdded || 0, run.sprintsUpdated || 0, run.skipped || 0])] },
+      ],
+    };
+    try {
+      setExportError('');
+      await (format === 'xlsx' ? window.axiloom.exportXlsx(report) : window.axiloom.exportPdf(report));
+    } catch (error) { setExportError(error instanceof Error ? error.message : 'Data quality export failed.'); }
+  }
   return <>
+    <div className="filter-actions"><button className="button tiny secondary" onClick={() => void exportQuality('xlsx')}><FileDown size={15} /> XLSX</button><button className="button tiny secondary" onClick={() => void exportQuality('pdf')}><Download size={15} /> PDF</button></div>
+    {exportError && <p className="form-error" role="alert">{exportError}</p>}
     <div className="metric-grid four">
       <MetricCard label="Issueهای بدون تاریخچه" value={formatNumber(snapshot.quality.issuesWithoutHistory, 0)} hint="گزارش تاریخی محدود می‌شود" tone={snapshot.quality.issuesWithoutHistory ? 'amber' : 'teal'} icon={<History size={16} />} />
       <MetricCard label="Changelog ناقص" value={formatNumber(snapshot.quality.incompleteHistories, 0)} hint="total از رکوردهای دریافت‌شده بیشتر است" tone={snapshot.quality.incompleteHistories ? 'red' : 'teal'} icon={<FileWarning size={16} />} />

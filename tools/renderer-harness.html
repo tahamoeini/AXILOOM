@@ -78,6 +78,7 @@
           created: '2026-02-01T00:00:00.000Z', updated: '2026-02-02T00:00:00.000Z', issueLinks: [],
           points: 5, epicLink: '', currentSprintIds: [], isDone: false,
         };
+        snapshot.epics = [{ key: 'ALPHA-100', summary: 'Synthetic product epic', epicName: 'Synthetic product epic', project: 'ALPHA', status: 'In Progress', assignee: 'Synthetic Owner', childrenCount: 1, childrenDone: 0, childStoryPoints: 5, technicalProjects: ['ALPHA'], teamGroups: [{ teamId: 'synthetic-team', team: 'Synthetic Team', issueCount: 1 }], linkedProducts: [] }];
         const syntheticObjective = {
           id: 'synthetic-objective', kind: 'objective', title: 'Synthetic market objective',
           payload: { ownerName: 'Synthetic Owner', status: 'Active', primaryIssueKey: 'ALPHA-101', strategicTheme: 'Research' },
@@ -121,7 +122,7 @@
         const rememberIssueExport = (format, report) => {
           const rows = report?.sheets?.[0]?.rows || [];
           const workflowScope = smoke.issueListRequests.at(-1)?.workflowScope || '';
-          const evidence = { format, workflowScope, lifecycleRoleHeader: rows[0]?.[6] || '', lifecycleRoleValue: rows[1]?.[6] || '' };
+          const evidence = { format, workflowScope, lifecycleRoleHeader: rows[0]?.[6] || '', lifecycleRoleValue: rows[1]?.[6] || '', sheetNames: (report?.sheets || []).map((sheet) => sheet.name), scope: report?.scope || null };
           smoke.issueExports.push({ format, report });
           document.body.dataset.lastIssueExport = JSON.stringify(evidence);
           document.title = `Axiloom renderer smoke · ${workflowScope || 'combined'} export ${format}`;
@@ -200,8 +201,9 @@
           exportConfigProfile: async () => { smoke.exportCalls += 1; return { canceled: false, filePath: 'synthetic-fixture-profile.json' }; },
           getCurrentUser: async () => null,
           getIssueOverviewStats: async () => ({ issueCount: 1, openCount: 1, epicLinkedCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: syntheticIssue.updated, projectCounts: [{ project: 'ALPHA', count: 1 }] }),
-          listIssues: async ({ project, workflowScope = '', offset = 0, limit = 50 } = {}) => {
-            smoke.issueListRequests.push({ project: project || '', workflowScope });
+          listIssues: async (filters = {}) => {
+            const { project, workflowScope = '', offset = 0, limit = 50, issueType, status, epic, query, createdFrom, createdTo } = filters;
+            smoke.issueListRequests.push({ ...filters, project: project || '', workflowScope });
             document.body.dataset.lastIssueWorkflowScope = workflowScope;
             document.title = `Axiloom renderer smoke · ${workflowScope || 'combined'}`;
             const scopes = workflowScope ? [workflowScope] : Object.entries(config.projectRoles).filter(([, projects]) => projects.includes(project)).map(([role]) => ({
@@ -219,15 +221,20 @@
               });
               return { ...issue, isDone, lifecycleRoles: ['backlog', 'ready', 'started', 'blocked', 'review', 'delivered', 'cancelled', 'committed'].filter((role) => roles.has(role)) };
             }) : [];
-            return { items: rows.slice(offset, offset + limit), total: rows.length, doneCount: rows.filter((issue) => issue.isDone).length,
-              openCount: rows.filter((issue) => !issue.isDone).length, withoutAssignee: 0, withEpicLink: 0,
-              offset, limit, hasMore: offset + limit < rows.length };
+            const matchingRows = rows.filter((issue) => (!issueType || issue.issueType === issueType)
+              && (!status || issue.status === status) && (!epic || issue.epicLink === epic)
+              && (!query || `${issue.key} ${issue.summary} ${issue.assignee}`.toLocaleLowerCase('en-US').includes(String(query).toLocaleLowerCase('en-US')))
+              && (!createdFrom || String(issue.created).slice(0, 10) >= createdFrom)
+              && (!createdTo || String(issue.created).slice(0, 10) <= createdTo));
+            return { items: matchingRows.slice(offset, offset + limit), total: matchingRows.length, doneCount: matchingRows.filter((issue) => issue.isDone).length,
+              openCount: matchingRows.filter((issue) => !issue.isDone).length, withoutAssignee: matchingRows.filter((issue) => !issue.assigneeKey).length, withEpicLink: matchingRows.filter((issue) => Boolean(issue.epicLink)).length,
+              offset, limit, hasMore: offset + limit < matchingRows.length };
           },
           getCalendarPeriodReport: async () => ({ created: 0, completed: 0, completedWithoutResolution: 0, previousCreated: null, previousCompleted: null, monthly: [] }),
           getBusinessBoardReport: async () => ({ summary: {}, issues: [], total: 0 }),
           getBusinessSprints: async () => [],
           getBusinessSprintReport: async () => ({ summary: {}, issues: [] }),
-          getIssueFilterOptions: async () => ({ projects: ['ALPHA'], issueTypes: ['Story'], statuses: ['In Progress'], priorities: ['Medium'], assignees: ['Synthetic Owner'], components: ['Research'], epics: [] }),
+          getIssueFilterOptions: async () => ({ projects: ['ALPHA'], issueTypes: ['Story'], statuses: ['In Progress'], priorities: ['Medium'], assignees: ['Synthetic Owner'], components: ['Research'], epics: [{ key: 'ALPHA-100', summary: 'Synthetic product epic' }] }),
           onImportProgress: () => () => {},
           onJiraProgress: (callback) => { smoke.jiraProgressHandler = callback; return () => { smoke.jiraProgressHandler = null; }; },
           saveRecord: async ({ id, kind, title, payload }) => {

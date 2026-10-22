@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, FileDown, Search } from 'lucide-react';
-import type { AppConfig, ExportReport, ProductRecord, Snapshot, IssueListResult } from '../types';
+import type { AppConfig, ExportReport, ProductRecord, Snapshot, IssueListFilters, IssueListResult } from '../types';
+import { createReportScope } from '../reporting';
 import JiraIssueEditor from '../components/JiraIssueEditor';
 import { DataTable, IssueKey, MetricCard, SectionHeading, StatusBadge, formatDate, formatNumber } from '../components/Primitives';
 
@@ -36,12 +37,13 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
   const label = isIntake ? 'Product intake' : 'Commitments';
   const localRecords = snapshot.records.filter((record) => record.kind === kind);
   const triggered = pending?.kind === kind && pending.nonce !== handledNonce;
+  const issueFilters = useMemo<IssueListFilters>(() => ({ project, status, query, workflowScope, sortBy: 'updated', sortDirection: 'desc' }), [project, status, query, workflowScope]);
 
   useEffect(() => {
     let active = true;
     if (!project) { setStats(emptyList); setStatuses([]); return () => { active = false; }; }
-    Promise.all([window.axiloom.listIssues({ project, workflowScope, limit: 1 }), window.axiloom.getIssueFilterOptions(project)])
-      .then(([result, options]) => { if (active) { setStats(result); setStatuses(options.statuses); } })
+    window.axiloom.getIssueFilterOptions(project)
+      .then((options) => { if (active) setStatuses(options.statuses); })
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : 'Issue summary could not be loaded.'); });
     return () => { active = false; };
   }, [project, workflowScope, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
@@ -51,13 +53,13 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
     if (!project) { setList(emptyList); setLoading(false); return () => { active = false; }; }
     setLoading(true); setError('');
     const timer = setTimeout(() => {
-      window.axiloom.listIssues({ project, status, query, workflowScope, offset, limit: 50, sortBy: 'updated', sortDirection: 'desc' })
-        .then((result) => { if (active) setList(result); })
+      window.axiloom.listIssues({ ...issueFilters, offset, limit: 50 })
+        .then((result) => { if (active) { setList(result); setStats(result); } })
         .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : 'Issue list could not be loaded.'); })
         .finally(() => { if (active) setLoading(false); });
     }, query ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
-  }, [project, status, query, workflowScope, offset, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
+  }, [issueFilters, offset, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
 
   async function exportAll(format: 'xlsx' | 'pdf') {
     setError('');
@@ -65,13 +67,19 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
       const issues: Array<Record<string, any>> = [];
       let nextOffset = 0, total = list.total;
       do {
-        const result = await window.axiloom.listIssues({ project, status, query, workflowScope, offset: nextOffset, limit: 250, sortBy: 'updated', sortDirection: 'desc' });
+        const result = await window.axiloom.listIssues({ ...issueFilters, offset: nextOffset, limit: 250 });
         issues.push(...result.items); total = result.total; nextOffset += result.items.length;
         if (!result.items.length) break;
       } while (nextOffset < total);
       const report: ExportReport = {
         fileName: 'Axiloom-' + project, title: label + ' · ' + project,
         subtitle: total + ' Jira issues. Field values use the active semantic mappings.',
+        scope: createReportScope(snapshot, {
+          view: label, semantics: 'report-wide', filters: issueFilters,
+          filterLabels: { project: 'Project', status: 'Status', query: 'Search', workflowScope: 'Workflow scope' },
+          primaryRowCount: issues.length, matchingRowCount: total,
+          notes: ['Workspace-level data-quality counts are not narrowed by these filters.'],
+        }),
         sheets: [{ name: project, rows: [['Key', 'Summary', 'Type', 'Components', 'Assignee', 'Status', 'Lifecycle roles', 'Priority', 'Created', 'Updated', 'Requester', 'Department', 'Product owner', 'Story points', 'Epic link'],
           ...issues.map((issue) => [issue.key, issue.summary, issue.issueType, issue.components.join(', '), issue.assignee, issue.status,
             (issue.lifecycleRoles || []).join(', '), issue.priority, issue.created, issue.updated, issue.requester || '', issue.department || '', issue.productOwner || '', issue.points ?? '', issue.epicLink || ''])] }],

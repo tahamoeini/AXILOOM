@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Download, FileDown, GitBranch, ListChecks, Search, Target, UsersRound } from 'lucide-react';
 import type { AppConfig, BusinessBoardFilters, BusinessBoardReport, BusinessSprintOption, BusinessSprintReport, ExportReport, ProductRecord, RecordKind, Snapshot } from '../types';
+import { createReportScope } from '../reporting';
 import { DataTable, IssueKey, MetricCard, SectionHeading, StatusBadge, formatDate, formatNumber, formatPercent } from '../components/Primitives';
 
 const emptyReport: BusinessBoardReport = {
@@ -104,6 +105,12 @@ export default function BusinessBoard({ snapshot, config, openIssue, createRecor
     const payload: ExportReport = {
       fileName: 'Axiloom-Product-Intake', title: 'Product intake report',
       subtitle: rows.length + ' issues; relationships are explicit Jira links, local audited links, or keys recorded in product records.',
+      scope: createReportScope(snapshot, {
+        view: 'Product intake', semantics: 'report-wide', filters,
+        filterLabels: { query: 'Search', component: 'Component', assignee: 'Assignee', status: 'Status', priority: 'Priority', createdFrom: 'Created from', createdTo: 'Created through' },
+        primaryRowCount: rows.length, matchingRowCount: aggregates.total,
+        notes: ['The export aggregates and issue rows use the same server-side filters.', 'Workspace-level data-quality counts are not narrowed by these filters.'],
+      }),
       sheets: [
         { name: 'Summary', rows: [['Metric', 'Value'], ['Total', aggregates.total], ['Open', aggregates.openCount], ['Completed', aggregates.doneCount], ['Linked to delivery', aggregates.linkedCount], ['Without owner', aggregates.withoutOwner], [], ['Status', 'Count'], ...aggregates.statuses.map((item) => [item.key, item.count])] },
         { name: 'Intake', rows: [['Issue', 'Summary', 'Project', 'Type', 'Components', 'Assignee', 'Status', 'Priority', 'Created', 'Age days', 'Department', 'Product owner', 'Linked delivery'], ...rows.map((issue) => [issue.key, issue.summary, issue.project, issue.issueType, issue.components.join(', '), issue.assignee, issue.status, issue.priority, issue.created, issue.issueAgeDays ?? '', issue.department || '', issue.productOwner || '', issue.linkedTechnicalKeys.join(', ')])] },
@@ -120,6 +127,13 @@ export default function BusinessBoard({ snapshot, config, openIssue, createRecor
       fileName: 'Axiloom-Commitment-Sprint-' + sprintReport.sprint.id,
       title: 'Sprint commitment report · ' + sprintReport.sprint.name,
       subtitle: 'Commitment and milestone meaning comes from the active workflow policy. Missing history and points remain visible.',
+      scope: createReportScope(snapshot, {
+        view: 'Sprint commitment', semantics: 'view-specific',
+        filters: { sprint: sprintReport.sprint.name, teams: sprintReport.teams.map((team) => team.team) },
+        filterLabels: { sprint: 'Sprint', teams: 'Teams' },
+        primaryRowCount: sprintReport.items.length, matchingRowCount: sprintReport.items.length,
+        notes: ['Attribution findings are included in the export.', 'Missing history and story points remain explicit.'],
+      }),
       sheets: [
         { name: 'Teams', rows: [['Team ID', 'Team', 'Committed issues', 'Committed SP', 'Missing SP', 'Added', 'Added SP', 'In scope at end', 'Completed', 'Completed SP', 'Exited', 'Point increase', 'Point decrease'], ...sprintReport.teams.map((team) => [team.teamId, team.team, team.committedCount, team.committedSP, team.committedMissingSPCount, team.addedCount, team.addedSP, team.inScopeAtEndCount, team.completedCount, team.completedSP, team.exitCount, team.pointIncreaseSP, team.pointDecreaseSP])] },
         { name: 'Milestones', rows: [['Team', 'Milestone', 'Reached', 'Story points', 'Missing story points'], ...sprintReport.teams.flatMap((team) => Object.entries(team.milestones).map(([id, value]) => [team.team, milestones.find((item) => item.id === id)?.label || value.label, value.count, value.storyPoints, value.missingStoryPoints]))] },

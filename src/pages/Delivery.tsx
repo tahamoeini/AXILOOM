@@ -5,12 +5,13 @@ import { Bar } from 'react-chartjs-2';
 import Analytics from '../components/Analytics';
 import DashboardLayout from '../components/DashboardLayout';
 import type { ExportReport, Snapshot } from '../types';
+import { createReportScope } from '../reporting';
 import { DataTable, MultiSelect, MetricCard, SectionHeading, StatusBadge, formatDate, formatNumber, formatPercent } from '../components/Primitives';
 
 type Mode = 'sprints' | 'people';
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
-function exportReport(snapshot: Snapshot, rows: Array<Record<string, any>>, mode: Mode, summaryOnly = false): ExportReport {
+function exportReport(snapshot: Snapshot, rows: Array<Record<string, any>>, mode: Mode, filters: Record<string, string[] | string>, summaryOnly = false): ExportReport {
   const metadata = mode === 'sprints'
     ? ['teamId', 'team', 'teamPath', 'sprintId', 'sprintName', 'state', 'sprintOrder', 'startDate', 'endDate', 'calendarDays', 'workingDays']
     : ['teamId', 'team', 'teamPath', 'assigneeKey', 'assignee', 'sprintId', 'sprintName', 'sprintOrder', 'startDate', 'endDate', 'calendarDays', 'workingDays'];
@@ -33,6 +34,13 @@ function exportReport(snapshot: Snapshot, rows: Array<Record<string, any>>, mode
   };
   const reportRows = rows.map((row) => [...metadata.map((key) => valueFor(row, key)), ...metricKeys.map((key) => valueFor(row, key))]);
   const dataSheet = { name: mode === 'sprints' ? 'Sprint Metrics' : 'Person Metrics', rows: [[...metadata.map(formatHeader), ...metricKeys.map(formatHeader)], ...reportRows] };
+  const summaryMetrics: Array<[string, string]> = mode === 'sprints'
+    ? [['scopeIssues', 'Issues in sprint scope'], ['completedIssues', 'Completed issues'], ['scopeSP', 'Story points in scope'], ['plannedSP', 'Planned story points'], ['adhocSP', 'Unplanned story points'], ['completedSP', 'Completed story points'], ['loggedHours', 'Logged hours proxy'], ['capacityHours', 'Configured capacity hours']]
+    : [['assignedIssues', 'Assigned issues'], ['completedIssues', 'Completed issues'], ['assignedSP', 'Assigned story points'], ['completedSP', 'Completed story points'], ['loggedHours', 'Logged hours proxy'], ['capacityHours', 'Configured capacity hours']];
+  const summarySheet = { name: 'Report Summary', rows: [['Metric', 'Value', 'Rows with value', 'Filtered rows'], ...summaryMetrics.map(([key, label]) => {
+    const values = rows.map((row) => row[key]).filter((value) => typeof value === 'number' && Number.isFinite(value));
+    return [label, values.length ? values.reduce((total, value) => total + value, 0) : '', values.length, rows.length];
+  })] };
   const qualitySheet = { name: 'Data Quality', rows: [
     ['شدت', 'کد', 'تعداد', 'توضیح'],
     ...snapshot.quality.findings.map((finding) => [finding.severity, finding.code, finding.count, finding.message]),
@@ -48,7 +56,14 @@ function exportReport(snapshot: Snapshot, rows: Array<Record<string, any>>, mode
     fileName: `Axiloom-${mode === 'sprints' ? 'delivery' : 'people'}${summaryOnly ? '-summary' : ''}`,
     title: summaryOnly ? `${title} · خلاصه` : title,
     subtitle: `${formatNumber(snapshot.summary.issueCount, 0)} issue محلی · ${formatNumber(snapshot.summary.unmappedTeamRelationCount, 0)} رابطهٔ issue-sprint بدون تیم از جمع‌های تیمی کنار گذاشته شده · XLSX شامل ${formatNumber(metricKeys.length, 0)} ستون متریک است. ساعات از delta تاریخچهٔ timespent به‌دست می‌آیند و worklog دقیق نیست.`,
-    sheets: summaryOnly ? [dataSheet] : [dataSheet, qualitySheet],
+    scope: createReportScope(snapshot, {
+      view: mode === 'sprints' ? 'Team and sprint delivery' : 'Team and person delivery',
+      semantics: 'report-wide', filters,
+      filterLabels: { team: 'Teams', sprintId: 'Sprints', person: 'People', from: 'Sprint start from', to: 'Sprint start through' },
+      primaryRowCount: rows.length, matchingRowCount: rows.length,
+      notes: ['Workspace-level data-quality counts are not narrowed by these filters.', 'Time spent is estimated from changelog deltas and is not a Jira worklog.'],
+    }),
+    sheets: summaryOnly ? [summarySheet, dataSheet] : [summarySheet, dataSheet, qualitySheet],
   };
 }
 
@@ -63,16 +78,27 @@ export default function Delivery({ snapshot, openSprint }: { snapshot: Snapshot;
   const sprintRows = useMemo(() => snapshot.sprintMetrics.filter((row) => (!team.length || team.includes(row.team)) && (!sprintId.length || sprintId.includes(row.sprintId)) && inDateRange(row)).sort((a, b) => Date.parse(a.startDate) - Date.parse(b.startDate)), [snapshot.sprintMetrics, team, sprintId, from, to]);
   const personRows = useMemo(() => snapshot.people.filter((row) => (!team.length || team.includes(row.team)) && (!sprintId.length || sprintId.includes(row.sprintId)) && (!person.length || person.includes(row.assigneeKey)) && inDateRange(row)).sort((a, b) => a.team.localeCompare(b.team) || a.assignee.localeCompare(b.assignee) || a.sprintId.localeCompare(b.sprintId)), [snapshot.people, team, sprintId, person, from, to]);
   const displayed = mode === 'sprints' ? sprintRows : personRows;
-  const sum = (key: string) => sprintRows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
+  const sum = (key: string) => {
+    const values = sprintRows.map((row) => row[key]).filter((value) => typeof value === 'number' && Number.isFinite(value));
+    return { value: values.length ? values.reduce((total, value) => total + value, 0) : null, covered: values.length, total: sprintRows.length };
+  };
+  const sumCombined = (keys: string[]) => {
+    const values = sprintRows.flatMap((row) => keys.every((key) => typeof row[key] === 'number' && Number.isFinite(row[key]))
+      ? [keys.reduce((total, key) => total + Number(row[key]), 0)] : []);
+    return { value: values.length ? values.reduce((total, value) => total + value, 0) : null, covered: values.length, total: sprintRows.length };
+  };
+  const displaySum = (metric: ReturnType<typeof sum>, suffix = '') => metric.value === null ? '—'
+    : `${formatNumber(metric.value)}${suffix}${metric.covered < metric.total ? ` · ${metric.covered}/${metric.total} rows` : ''}`;
   const compositionRows = sprintRows.filter((row) => row.plannedSP != null || row.adhocSP != null);
   const compositionLabels = compositionRows.map((row) => `${row.team} · ${row.sprintName} · #${row.sprintId}`);
+  const chartNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
   const compositionData = {
     labels: compositionLabels,
     datasets: [
-      { label: 'کل Planned', data: compositionRows.map((row) => Number(row.plannedSP) || 0), backgroundColor: '#b9ded8', borderRadius: 3 },
-      { label: 'Planned انجام‌شده', data: compositionRows.map((row) => Number(row.completedPlannedSP) || 0), backgroundColor: '#168b89', borderRadius: 3 },
-      { label: 'کل Ad hoc', data: compositionRows.map((row) => Number(row.adhocSP) || 0), backgroundColor: '#f0d8b6', borderRadius: 3 },
-      { label: 'Ad hoc انجام‌شده', data: compositionRows.map((row) => Number(row.completedAdhocSP) || 0), backgroundColor: '#d89545', borderRadius: 3 },
+      { label: 'کل Planned', data: compositionRows.map((row) => chartNumber(row.plannedSP)), backgroundColor: '#b9ded8', borderRadius: 3 },
+      { label: 'Planned انجام‌شده', data: compositionRows.map((row) => chartNumber(row.completedPlannedSP)), backgroundColor: '#168b89', borderRadius: 3 },
+      { label: 'کل Ad hoc', data: compositionRows.map((row) => chartNumber(row.adhocSP)), backgroundColor: '#f0d8b6', borderRadius: 3 },
+      { label: 'Ad hoc انجام‌شده', data: compositionRows.map((row) => chartNumber(row.completedAdhocSP)), backgroundColor: '#d89545', borderRadius: 3 },
     ],
   };
   const compositionOptions = {
@@ -82,7 +108,8 @@ export default function Delivery({ snapshot, openSprint }: { snapshot: Snapshot;
     scales: { x: { beginAtZero: true, title: { display: true, text: 'Story Point' } }, y: { ticks: { autoSkip: false } } },
   };
   const exportCurrent = async (pdf = false) => {
-    const report = exportReport(snapshot, displayed, mode, pdf);
+    const filters = { team, sprintId, ...(mode === 'people' ? { person } : {}), from, to };
+    const report = exportReport(snapshot, displayed, mode, filters, pdf);
     if (pdf) await window.axiloom.exportPdf(report); else await window.axiloom.exportXlsx(report);
   };
 
@@ -108,14 +135,16 @@ export default function Delivery({ snapshot, openSprint }: { snapshot: Snapshot;
 
     <DashboardLayout storageKey="delivery" widgets={[
       { id: 'analytics', title: 'تحلیل روند تیم و اسپرینت', content: <Analytics key={mode} rows={displayed} people={mode === 'people'} openSprint={openSprint} /> },
+      ...(mode === 'sprints' ? [
       { id: 'composition', title: 'Planned و Ad hoc', content: <section className="panel"><SectionHeading title="تعهد و تحویل Planned / Ad hoc" hint="در هر Team × Sprint، کل Planned با Planned انجام‌شده و کل Ad hoc با Ad hoc انجام‌شده جفت شده‌اند. این جفت‌ها نسبت و اختلاف را بدون حدسِ باقی‌مانده نشان می‌دهند." />
-        <div className="metric-grid six composition-summary"><MetricCard label="کل Planned" value={`${formatNumber(sum('plannedSP'))} SP`} tone="teal" /><MetricCard label="Planned انجام‌شده" value={`${formatNumber(sum('completedPlannedSP'))} SP`} tone="teal" /><MetricCard label="کل Ad hoc" value={`${formatNumber(sum('adhocSP'))} SP`} tone="amber" /><MetricCard label="Ad hoc انجام‌شده" value={`${formatNumber(sum('completedAdhocSP'))} SP`} tone="amber" /><MetricCard label="کل دامنه" value={`${formatNumber(sum('plannedSP') + sum('adhocSP'))} SP`} /><MetricCard label="کل انجام‌شده" value={`${formatNumber(sum('completedPlannedSP') + sum('completedAdhocSP'))} SP`} tone="blue" /></div>
+        <div className="metric-grid six composition-summary"><MetricCard label="کل Planned" value={displaySum(sum('plannedSP'), ' SP')} tone="teal" /><MetricCard label="Planned انجام‌شده" value={displaySum(sum('completedPlannedSP'), ' SP')} tone="teal" /><MetricCard label="کل Ad hoc" value={displaySum(sum('adhocSP'), ' SP')} tone="amber" /><MetricCard label="Ad hoc انجام‌شده" value={displaySum(sum('completedAdhocSP'), ' SP')} tone="amber" /><MetricCard label="کل دامنه" value={displaySum(sumCombined(['plannedSP', 'adhocSP']), ' SP')} /><MetricCard label="کل انجام‌شده" value={displaySum(sumCombined(['completedPlannedSP', 'completedAdhocSP']), ' SP')} tone="blue" /></div>
         {compositionRows.length ? <div className="composition-bar-scroll"><div className="composition-bar-canvas" style={{ height: `${Math.max(300, Math.min(1200, compositionRows.length * 34 + 100))}px` }}><Bar data={compositionData} options={compositionOptions} /></div></div> : <div className="chart-empty">برای Team × Sprint انتخابی SP برنامه و Ad hoc موجود نیست.</div>}
         <div className="callout info compact-callout">برای هر Team × Sprint، چهار مقدار جدا دیده می‌شود. کارت‌های بالای نمودار هم کل Planned، Planned انجام‌شده، کل Ad hoc، Ad hoc انجام‌شده، مجموع دامنه و مجموع تحویل را در فیلتر انتخابی جمع می‌کنند.</div>
       </section> },
       { id: 'flow', title: 'شاخص‌های جریان', content: <section className="panel"><SectionHeading title="شاخص‌های جریان برای هر Team × Sprint" hint="این نما در عرض کامل قرار می‌گیرد تا نام اسپرینت و ستون‌های کیفیت، مصرف، بازگشایی و پیش‌بینی بدون فشردگی خوانده شوند." />
         <DataTable headers={['تیم', 'اسپرینت', 'ثبات Scope', 'مصرف ظرفیت', 'بازگشایی', 'پوشش SP', 'پوشش زمان', 'پوشش تخمین/زمان', 'Forecast', 'سابقه Forecast']} rows={sprintRows.map((row) => [row.team, <button className="sprint-detail-link table-sprint-link" onClick={() => openSprint(String(row.sprintId))}>{row.sprintName}<small>#{row.sprintId} · جزئیات</small></button>, formatPercent(row.scopeStability), formatPercent(row.utilization), formatPercent(row.reopenedIssueRate), formatPercent(row.storyPointCoverage), formatPercent(row.timeDataCoverage), formatPercent(row.estimateAccuracyCoverage), row.forecastMethod || '—', `${row.forecastConfidence || 'ناموجود'} · ${formatNumber(Number(row.forecastHistorySprints || 0), 0)}`])} empty="پس از انتخاب تیم و import اسپرینت، شاخص‌های جریان نمایش داده می‌شوند." />
       </section> },
+      ] : []),
     ]} />
 
     <section className="panel table-panel">

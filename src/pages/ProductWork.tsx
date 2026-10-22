@@ -4,6 +4,7 @@ import RecordEditor from '../components/RecordEditor';
 import type { AppConfig, ExportReport, PageId, ProductRecord, ProductRelationship, RecordKind, RecordTemplate, Snapshot } from '../types';
 import BusinessOrgAnalytics from '../components/BusinessOrgAnalytics';
 import { DataTable, EmptyState, IssueKey, SectionHeading, StatusBadge, formatDate, formatNumber } from '../components/Primitives';
+import { createReportScope } from '../reporting';
 
 const PAGE_KIND: Partial<Record<PageId, RecordKind>> = { objectives: 'objective', requests: 'request', actions: 'action', decisions: 'decision', meetings: 'meeting', outcomes: 'outcome', stakeholders: 'stakeholder' };
 const PAGE_NAMES: Partial<Record<PageId, string>> = { objectives: 'هدف‌های محصول', requests: 'درخواست‌ها', actions: 'تعهدها و پیگیری‌ها', decisions: 'تصمیم‌های ثبت‌شده', meetings: 'جلسه‌ها و خروجی‌ها', outcomes: 'Outcomeها', stakeholders: 'ذی‌نفعان' };
@@ -238,6 +239,13 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
       fileName: `Axiloom-${targetKind}-management${summaryOnly ? '-summary' : ''}`,
       title: PAGE_NAMES[page] || 'گزارش مدیریت محصول',
       subtitle: 'ثبت‌های محلی و پیوندهای صریح Jira؛ تحویل تاریخی از عضویت Issue-Sprint و ساعت از deltaهای changelog محاسبه شده است.',
+      scope: createReportScope(snapshot, {
+        view: PAGE_NAMES[page] || activeTemplate?.label || 'Product records', semantics: 'active-tab',
+        filters: { recordKind: activeTemplate?.label || targetKind, query, status },
+        filterLabels: { recordKind: 'Record type', query: 'Search', status: 'Status' },
+        primaryRowCount: records.length, matchingRowCount: records.length,
+        notes: ['Only records matching the visible search and status filters are included.', 'Jira delivery rows retain explicit linked issue and sprint attribution.'],
+      }),
       sheets: summaryOnly ? [recordSheet, { name: 'Jira Links', rows: deliveryRows }] : [recordSheet, { name: 'Jira Delivery', rows: deliveryRows }, historySheet],
     };
     return summaryOnly ? window.axiloom.exportPdf(report) : window.axiloom.exportXlsx(report);

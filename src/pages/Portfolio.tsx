@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Download, FileDown, Filter, GitBranch, Layers3, Search, TicketCheck } from 'lucide-react';
 import type { AppConfig, ExportReport, IssueListFilters, IssueListResult, Snapshot } from '../types';
+import { createReportScope } from '../reporting';
 import { DataTable, IssueKey, MetricCard, ProgressBar, SectionHeading, StatusBadge, formatDate, formatNumber } from '../components/Primitives';
 import EpicDetailModal from '../components/EpicDetailModal';
 
@@ -23,27 +24,33 @@ export default function Portfolio({ snapshot, config, openIssue }: { snapshot: S
   const [issueError, setIssueError] = useState('');
   const [selectedEpic, setSelectedEpic] = useState<{ key: string; summary?: string; epicName?: string } | null>(null);
   const selectedWorkflowScope = workflowScope === 'all' ? undefined : workflowScope;
+  const issueFilters = useMemo<IssueListFilters>(() => ({ project, issueType, status, epic, query, createdFrom: from, createdTo: to, workflowScope: selectedWorkflowScope }),
+    [project, issueType, status, epic, query, from, to, selectedWorkflowScope]);
+
+  useEffect(() => {
+    let active = true;
+    window.axiloom.getIssueFilterOptions()
+      .then((options) => { if (active) setIssueOptions(options); })
+      .catch((error) => { if (active) setIssueError(error instanceof Error ? error.message : 'فیلترهای issue خوانده نشدند.'); });
+    return () => { active = false; };
+  }, [snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
 
   useEffect(() => {
     if (tab !== 'issues') return;
     let active = true;
-    Promise.all([window.axiloom.getIssueFilterOptions(), window.axiloom.listIssues({workflowScope:selectedWorkflowScope,limit:1})])
-      .then(([options, stats]) => { if (active) { setIssueOptions(options); setIssueStats({issueCount:stats.total,openCount:stats.openCount,epicLinkedCount:stats.withEpicLink}); } })
-      .catch((error) => { if (active) setIssueError(error instanceof Error ? error.message : 'فیلترهای issue خوانده نشدند.'); });
-    return () => { active = false; };
-  }, [tab, selectedWorkflowScope, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
-
-  useEffect(() => {
-    let active = true;
     setIssueLoading(true); setIssueError('');
-    const filters: IssueListFilters = { project, issueType, status, epic, query, createdFrom:from, createdTo:to, workflowScope:selectedWorkflowScope, offset:issueOffset, limit:50, sortBy:'key' };
     const timer = setTimeout(() => {
-      window.axiloom.listIssues(filters).then((result) => { if (active) setIssueList(result); })
+      window.axiloom.listIssues({ ...issueFilters, offset: issueOffset, limit: 50, sortBy: 'key' }).then((result) => {
+        if (active) {
+          setIssueList(result);
+          setIssueStats({ issueCount: result.total, openCount: result.openCount, epicLinkedCount: result.withEpicLink });
+        }
+      })
         .catch((error) => { if (active) setIssueError(error instanceof Error ? error.message : 'فهرست issue خوانده نشد.'); })
         .finally(() => { if (active) setIssueLoading(false); });
     }, query ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
-  }, [tab, project, issueType, status, epic, query, from, to, workflowScope, issueOffset, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
+  }, [tab, issueFilters, query, issueOffset, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
 
   const filteredIssues = issueList.items;
   const filteredEpics = useMemo(() => snapshot.epics.filter((item) => (!project || item.project === project)
@@ -52,19 +59,31 @@ export default function Portfolio({ snapshot, config, openIssue }: { snapshot: S
   const active = issueStats.openCount;
   const mapped = issueStats.epicLinkedCount;
   const intakeCount = snapshot.summary.projectCounts.filter((item) => config?.projectRoles.productIntake?.includes(item.project)).reduce((sum, item) => sum + item.count, 0);
-  const makeReport = (allIssues: Array<Record<string, any>>): ExportReport => ({
-    fileName: 'Axiloom-portfolio', title: 'پرتفوی، Epic و پرونده‌های Jira',
-    subtitle: `${formatNumber(snapshot.summary.issueCount, 0)} پروندهٔ محلی؛ تیم‌های Epic از issueهای فرزند با انتساب گزارش‌شده می‌آیند.`,
-    sheets: [
-      { name: 'Epics', rows: [['Epic Key', 'نام', 'پروژه', 'وضعیت', 'مالک', 'آیتم مرتبط', 'آیتم تکمیل', 'SP فرزند', 'پروژه‌های فنی', 'تیم‌های دارای فرزند', 'ثبت محصول متصل'], ...filteredEpics.map((row) => [row.key, row.summary || row.epicName, row.project, row.status, row.assignee, row.childrenCount, row.childrenDone, row.childStoryPoints, row.technicalProjects.join(', '), (row.teamGroups || []).map((group: any) => `${group.team} (${group.issueCount})`).join(', '), row.linkedProducts.length])] },
-      { name: 'Issues', rows: [['Key', 'عنوان', 'پروژه', 'نوع', 'وضعیت', 'مسئول', 'Story Point', 'Epic Link', 'Created', 'Updated'], ...allIssues.map((row) => [row.key, row.summary, row.project, row.issueType, row.status, row.assignee, row.points, row.epicLink, row.created, row.updated])] },
-    ],
-  });
+  const makeReport = (allIssues: Array<Record<string, any>>): ExportReport => {
+    const epicSheet = { name: 'Epics', rows: [['Epic Key', 'نام', 'پروژه', 'وضعیت', 'مالک', 'آیتم مرتبط', 'آیتم تکمیل', 'SP فرزند', 'پروژه‌های فنی', 'تیم‌های دارای فرزند', 'ثبت محصول متصل'], ...filteredEpics.map((row) => [row.key, row.summary || row.epicName, row.project, row.status, row.assignee, row.childrenCount, row.childrenDone, row.childStoryPoints, row.technicalProjects.join(', '), (row.teamGroups || []).map((group: any) => `${group.team} (${group.issueCount})`).join(', '), row.linkedProducts.length])] };
+    const issueSheet = { name: 'Issues', rows: [['Key', 'عنوان', 'پروژه', 'نوع', 'وضعیت', 'مسئول', 'Story Point', 'Epic Link', 'Created', 'Updated'], ...allIssues.map((row) => [row.key, row.summary, row.project, row.issueType, row.status, row.assignee, row.points, row.epicLink, row.created, row.updated])] };
+    const activeRows = tab === 'epics' ? filteredEpics.length : allIssues.length;
+    return {
+      fileName: `Axiloom-portfolio-${tab}`,
+      title: tab === 'epics' ? 'Portfolio · filtered Epics' : 'Portfolio · filtered issues',
+      subtitle: `${formatNumber(activeRows, 0)} rows from the active Portfolio tab. Each Epic uses reported child-issue attribution.`,
+      scope: createReportScope(snapshot, {
+        view: tab === 'epics' ? 'Portfolio Epics' : 'Portfolio issues', semantics: 'active-tab',
+        filters: tab === 'epics'
+          ? { project, teamId: config?.teams.find((team) => team.id === teamId)?.name || '', query }
+          : { ...issueFilters, workflowScope: workflowScope === 'all' ? 'All configured project roles' : workflowScope },
+        filterLabels: { project: 'Project', teamId: 'Delivery team', issueType: 'Issue type', status: 'Status', epic: 'Epic', query: 'Search', createdFrom: 'Created from', createdTo: 'Created through', workflowScope: 'Workflow scope' },
+        primaryRowCount: activeRows, matchingRowCount: activeRows,
+        notes: ['Workspace-level data-quality counts are not narrowed by these filters.'],
+      }),
+      sheets: tab === 'epics' ? [epicSheet] : [issueSheet],
+    };
+  };
   async function exportFiltered(format:'xlsx'|'pdf') {
     const all: Array<Record<string, any>> = [];
     let offset = 0; let total = issueList.total;
-    do {
-      const result = await window.axiloom.listIssues({project,issueType,status,epic,query,createdFrom:from,createdTo:to,workflowScope:selectedWorkflowScope,offset,limit:250,sortBy:'key'});
+    if (tab === 'issues') do {
+      const result = await window.axiloom.listIssues({ ...issueFilters, offset, limit: 250, sortBy: 'key' });
       all.push(...result.items); total = result.total; offset += result.items.length;
       if (!result.items.length) break;
     } while (offset < total);
@@ -75,26 +94,26 @@ export default function Portfolio({ snapshot, config, openIssue }: { snapshot: S
   function setFilter(update: () => void) { setIssueOffset(0); update(); }
 
   return <>
-    <section className="metric-grid four">
-      <MetricCard label="Epicهای Jira" value={formatNumber(snapshot.summary.epicCount, 0)} hint="Epic Link uses the configured semantic mapping." tone="blue" icon={<Layers3 size={16} />} />
-      <MetricCard label="پروندهٔ باز" value={formatNumber(active, 0)} hint={`${formatNumber(snapshot.summary.issueCount, 0)} کل پرونده`} tone="teal" icon={<TicketCheck size={16} />} />
-      <MetricCard label="Epic Link معتبر در خروجی" value={formatNumber(mapped, 0)} hint="رابطهٔ فنی ثبت‌شده در Jira" tone="purple" icon={<GitBranch size={16} />} />
-      <MetricCard label="پروژه‌های intake" value={formatNumber(intakeCount, 0)} hint="طبق نقش‌های پروژه در تنظیمات" tone="amber" icon={<Filter size={16} />} />
-    </section>
+    {tab === 'issues' ? <section className="metric-grid four">
+      <MetricCard label="Epicهای Jira" value={formatNumber(snapshot.summary.epicCount, 0)} hint="Workspace-wide; not narrowed by issue filters." tone="blue" icon={<Layers3 size={16} />} />
+      <MetricCard label="پروندهٔ باز" value={formatNumber(active, 0)} hint={`${formatNumber(issueStats.issueCount, 0)} issues matching current filters`} tone="teal" icon={<TicketCheck size={16} />} />
+      <MetricCard label="Epic Link معتبر در خروجی" value={formatNumber(mapped, 0)} hint="Matches the active issue filters." tone="purple" icon={<GitBranch size={16} />} />
+      <MetricCard label="پروژه‌های intake" value={formatNumber(intakeCount, 0)} hint="Workspace-wide project-role count; not narrowed by filters." tone="amber" icon={<Filter size={16} />} />
+    </section> : <div className="callout info">Epic filters, table rows, and exports share the same project, team, and search scope. Data-quality context remains workspace-wide.</div>}
 
     <section className="panel portfolio-filter">
-      <div className="filter-caption"><span className="filter-mark"><Search size={16} /></span><div><b>جست‌وجو و برش داده</b><small>پروژه، Epic، نوع، وضعیت و تاریخ ایجاد</small></div></div>
+      <div className="filter-caption"><span className="filter-mark"><Search size={16} /></span><div><b>جست‌وجو و برش داده</b><small>{tab === 'epics' ? 'Epic table and export: project, delivery team, and search.' : 'Issue table, matching counts, and export: project, workflow scope, type, status, Epic, and created dates.'}</small></div></div>
       <div className="portfolio-controls">
         <label className="search-field"><span>متن یا کلید Jira</span><div><Search size={15} /><input value={query} onChange={(event) => setFilter(() => setQuery(event.target.value))} placeholder="کلید یا بخشی از عنوان" /></div></label>
         <label>پروژه<select value={project} onChange={(event) => setFilter(() => setProject(event.target.value))}><option value="">همه</option>{issueOptions.projects.map((value) => <option key={value}>{value}</option>)}</select></label>
         {tab === 'issues' && <label>سیاست Workflow<select value={workflowScope} onChange={(event) => setFilter(() => setWorkflowScope(event.target.value as typeof workflowScope))}><option value="all">ترکیب نقش‌های پروژه</option><option value="delivery">تحویل</option><option value="intake">درخواست محصول</option><option value="commitment">تعهد</option></select></label>}
         {tab === 'epics' && <label>تیم تحویل<select value={teamId} onChange={(event) => setFilter(() => setTeamId(event.target.value))}><option value="">همهٔ تیم‌ها</option>{(config?.teams || []).map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>}
-        <label>Epic<select value={epic} onChange={(event) => setFilter(() => setEpic(event.target.value))}><option value="">همهٔ Epicها</option>{issueOptions.epics.map((item) => <option key={item.key} value={item.key}>{item.key} · {item.summary}</option>)}</select></label>
-        <label>نوع کار<select value={issueType} onChange={(event) => setFilter(() => setIssueType(event.target.value))}><option value="">همه</option>{issueOptions.issueTypes.map((value) => <option key={value}>{value}</option>)}</select></label>
-        <label>وضعیت<select value={status} onChange={(event) => setFilter(() => setStatus(event.target.value))}><option value="">همه</option>{issueOptions.statuses.map((value) => <option key={value}>{value}</option>)}</select></label>
-        <label>ایجاد از<input type="date" value={from} onChange={(event) => setFilter(() => setFrom(event.target.value))} /></label>
-        <label>تا<input type="date" value={to} onChange={(event) => setFilter(() => setTo(event.target.value))} /></label>
-        <div className="filter-actions"><button className="button tiny secondary" onClick={() => void exportFiltered('xlsx')}><FileDown size={15} /> XLSX همهٔ نتایج</button><button className="button tiny secondary" onClick={() => void exportFiltered('pdf')}><Download size={15} /> PDF همهٔ نتایج</button></div>
+        {tab === 'issues' && <label>Epic<select value={epic} onChange={(event) => setFilter(() => setEpic(event.target.value))}><option value="">همهٔ Epicها</option>{issueOptions.epics.map((item) => <option key={item.key} value={item.key}>{item.key} · {item.summary}</option>)}</select></label>}
+        {tab === 'issues' && <label>نوع کار<select value={issueType} onChange={(event) => setFilter(() => setIssueType(event.target.value))}><option value="">همه</option>{issueOptions.issueTypes.map((value) => <option key={value}>{value}</option>)}</select></label>}
+        {tab === 'issues' && <label>وضعیت<select value={status} onChange={(event) => setFilter(() => setStatus(event.target.value))}><option value="">همه</option>{issueOptions.statuses.map((value) => <option key={value}>{value}</option>)}</select></label>}
+        {tab === 'issues' && <label>ایجاد از<input type="date" value={from} onChange={(event) => setFilter(() => setFrom(event.target.value))} /></label>}
+        {tab === 'issues' && <label>تا<input type="date" value={to} onChange={(event) => setFilter(() => setTo(event.target.value))} /></label>}
+        <div className="filter-actions"><button className="button tiny secondary" onClick={() => void exportFiltered('xlsx')}><FileDown size={15} /> XLSX · {tab === 'epics' ? 'Filtered Epics' : 'All matching issues'}</button><button className="button tiny secondary" onClick={() => void exportFiltered('pdf')}><Download size={15} /> PDF · {tab === 'epics' ? 'Filtered Epics' : 'All matching issues'}</button></div>
       </div>
       {issueError && <p className="form-error" role="alert">{issueError}</p>}
     </section>
