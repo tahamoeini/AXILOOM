@@ -13,6 +13,8 @@
     "test:data-access": "node tools/test-data-access.mjs",
     "test:configuration": "node tools/test-configuration.mjs",
     "test:workspaces": "node tools/test-workspaces.mjs",
+    "test:migration": "node tools/test-workspace-migration.mjs",
+    "migrate:workspace": "node tools/migrate-workspace.mjs",
     "build:portable": "npm run build && node tools/build-portable.mjs",
     "build:mac": "npm run build && node tools/build-macos.mjs",
     "launch:portable": "node tools/launch-portable.mjs"

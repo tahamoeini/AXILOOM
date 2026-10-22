@@ -536,8 +536,8 @@ function historyCoverage(db, jiraId, reportedTotal = null, hasChangelog = false)
   return { rows, total, complete };
 }
 
-function storeIssueEvidence(db, issue, jiraId, issueKey, sourceFile, importedAt) {
-  const rawJson = JSON.stringify(issue);
+function storeIssueEvidence(db, issue, jiraId, issueKey, sourceFile, importedAt, preservedRawJson = null) {
+  const rawJson = typeof preservedRawJson === 'string' ? preservedRawJson : JSON.stringify(issue);
   const hash = createHash('sha256').update(rawJson).digest('hex');
   const changelog = issue?.changelog;
   const histories = Array.isArray(changelog?.histories) ? changelog.histories : [];
@@ -609,7 +609,7 @@ function migrateIssueEvidence(db) {
         let issue;
         try { issue = JSON.parse(row.raw_json); } catch { continue; }
         const importedAt = row.imported_at || new Date().toISOString();
-        storeIssueEvidence(db, issue, row.jira_id, row.issue_key, row.source_file, importedAt);
+        storeIssueEvidence(db, issue, row.jira_id, row.issue_key, row.source_file, importedAt, row.raw_json);
         const coverage = historyCoverage(db, row.jira_id, issue?.changelog?.total, Boolean(issue?.changelog));
         const merged = buildMergedIssue(issue, issue, false, coverage.rows, coverage.total, coverage.complete);
         db.prepare('UPDATE jira_issues SET raw_json=?,history_complete=?,history_total=? WHERE jira_id=?')

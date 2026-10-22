@@ -10,20 +10,27 @@
 |---|---|
 | Source baseline | `master` at `1c92613c6b48c2e24210f12676937a0e649f706d`, tag `v1.0.13`. |
 | Source worktree | Inspected as clean before work; unchanged by this mission. |
-| Destination | `F:\Projects\AXILOOM`, branch `codex/axiloom-transformation`; no commit or remote is configured yet. |
-| Destination repository target | No accessible configured GitHub remote. The intended destination was not found in the connected GitHub account during earlier inspection. Creating a public repository or changing visibility requires authorization under the mission contract. |
+| Destination | `F:\Projects\AXILOOM`, branch `codex/axiloom-transformation`, baseline commit `89bc9500417550bf11eadcfe6f262e523141243f`. |
+| Destination repository target | `https://github.com/tahamoeini/AXILOOM.git`; GitHub confirms the repository exists, is public, and the connected account has admin/push permission. The local branch tracks the same-named remote branch. A direct `git ls-remote` could not run because the local network layer returned `getaddrinfo() thread failed to start`; no new commit has been pushed in this turn. |
+| License | No `LICENSE` file is present. The intended code license and release attribution have not been selected or documented. |
 | Source preservation | The staged destination began as a byte-identical copy of 63 tracked source files. Original checkout and history remain untouched. Tenant-derived catalog and export schemas have since been replaced with generic shapes in this destination. |
-| Automated checks | Configuration, data-access, and workspace isolation checks passed in local runs. See the recorded final command results in the handoff. |
-| Renderer build | TypeScript and Vite production build passed with local filesystem access. The sandboxed invocation fails at Vite `realpath` with `EPERM`; this environment requires an elevated local build. |
-| UI/E2E | No end-to-end renderer result is recorded yet. |
+| Automated checks | Configuration, data-access, workspace isolation, and workspace migration suites passed on 2026-10-22. The migration test requires local filesystem access for temporary-file replacement. |
+| Renderer build | Fresh TypeScript and Vite production build passed on 2026-10-22 with local filesystem access. The sandboxed invocation fails at Vite `realpath` with `EPERM`. |
+| UI/E2E | The actual renderer was opened in the in-app browser through a synthetic in-memory bridge. Overview and Objectives rendered; an Objective and explicitly linked `Unknown` Outcome were added. This does not exercise Electron IPC, SQLite persistence, Jira, exports, or accessibility. |
 | Package/release | Not built. The expected verified Electron runtime archive is not available in the local cache. |
+
+## Current mission change inventory
+
+- `tools/migrate-workspace.mjs`, `tools/test-workspace-migration.mjs`, `electron/database.cjs`, and `package.json`: add a closed-workspace copy migration, staging-only schema changes, evidence/count reconciliation, source-file immutability checks, and a genuine minimal schema-version-1 fixture.
+- `tools/renderer-harness.html`: add a browser-only synthetic renderer fixture using an in-memory bridge.
+- `README.md`, `docs/generalization-coverage.csv`, `docs/implementation-progress.md`, `docs/recovery-review.md`, `docs/workspace-migration.md`, and `docs/release-verification.md`: record usage, coverage, verification evidence, and remaining release gates.
 
 ## Work-package status
 
 | WP | Status | Current evidence and open work |
 |---|---|---|
 | WP00 Baseline and inventory | Partial | Source and destination inspected; source commit and pristine state recorded. Observable report baselines and complete route/IPC/security inventory remain. |
-| WP01 Destination and identity | Partial | Neutral Axiloom identity and clean destination branch are in place. No destination remote is configured; GitHub handoff is blocked on an authorized repository target. |
+| WP01 Destination and identity | Partial | Neutral Axiloom identity, clean-history branch, and existing public GitHub target are in place. Public code licensing/attribution is unspecified, and remote state could not be queried through local Git networking. |
 | WP02 Workspace/source isolation | Partial | Separate workspace databases and switching are implemented; synthetic isolation checks pass. Multiple independent source instances inside one workspace remain unsupported. |
 | WP03 Dynamic configuration | Partial | Versioned profile normalization, validation, settings, and config revision history exist. Complete setup wizard, policy completeness, and alternative-profile acceptance remain. |
 | WP04 Provider adapters | Partial | Offline JSON and a Jira Server/Data Center bearer-token path exist. No live tenant test; Jira Cloud OAuth is unimplemented and explicitly unclaimed. |
@@ -35,11 +42,11 @@
 | WP10 Product traceability | Partial | Objectives, requests, decisions, meetings, actions, outcomes, stakeholder records, and explicit Jira keys are available. Relationships still rely partly on payload references rather than a complete typed, revisioned relation model. |
 | WP11 Reports and exports | Partial | Delivery, portfolio, product views, XLSX/PDF paths, and data quality exist. Filter/export parity and renderer verification are outstanding. |
 | WP12 Setup and localization | Partial | Profile settings and dynamic number/date formatting exist. The interface is still mostly Persian with mixed English; complete English/LTR translation and accessibility review are open. |
-| WP13 Migration and performance | Partial | SQLite schema migration, profile normalization, workspace backup/restore, and synthetic cache tests exist. Dedicated legacy database migration and 50 MB–1 GB benchmarks are missing. |
+| WP13 Migration and performance | Partial | SQLite schema migration, profile normalization, workspace backup/restore, and synthetic cache tests exist. A non-overwriting closed-workspace migration command and synthetic reconciliation test now exist. Real-data migration/restore, migration failure/rollback injection, and 50 MB–1 GB benchmarks are missing. |
 | WP14 Security and resilience | Partial | HTTPS/host policy, OS-backed credential protection, guarded mutations, and backup validation are implemented. Independent security review, redirect/DNS edge cases, and failure-injection tests remain. |
-| WP15 Automated verification | Partial | Three focused Node suites pass. No browser E2E, accessibility, provider contract, migration drill, performance suite, or independent report/export test. |
-| WP16 Documentation and packaging | Partial | Generic setup/data/security/metrics docs and package scripts exist. Desktop archives and artifact inspection have not passed. |
-| WP17 Final acceptance | Not started | Final scan, UI walkthrough, package, release target, exact commit, and acceptance evidence remain. |
+| WP15 Automated verification | Partial | Four focused Node suites and the renderer fixture walkthrough pass. No full Electron E2E, accessibility, provider contract, real-data migration drill, performance suite, or independent report/export test. |
+| WP16 Documentation and packaging | Partial | Generic setup/data/security/metrics docs and package scripts exist. The code license, third-party notices, and asset provenance are undocumented; renderer build passes, but desktop archives and artifact inspection have not passed. |
+| WP17 Final acceptance | Partial | Synthetic renderer UI and targeted sanitation scan are recorded. Full trace audit, package, licensing, real-data and performance gates, remote delivery/CI, and complete acceptance evidence remain. |
 
 ## Validation record
 
@@ -48,9 +55,10 @@
 | `npm run test:configuration` | Passed. |
 | `npm run test:data-access` | Passed against synthetic configured Jira data. |
 | `npm run test:workspaces` | Passed with local filesystem access; validates synthetic database isolation only. |
+| `npm run test:migration` | Passed with local filesystem access; synthetic source/destination schema reconciliation, dry-run cleanup, byte-preservation, and no-overwrite checks. |
 | `npm run build` | Passed with local filesystem access; TypeScript check and Vite bundle completed. Sandboxed Vite access failed with `EPERM`. |
-| Renderer UI/E2E | Not yet verified. |
-| Windows portable archive | Not built; required Electron runtime archive is unavailable locally. |
+| Renderer UI fixture | Passed in the in-app browser using a synthetic in-memory bridge; Electron, persistence, exports, and accessibility were not exercised. |
+| Windows portable archive | Renderer build completed, then packaging stopped because the verified Electron `45.0.0` Windows x64 runtime archive is unavailable locally. |
 | macOS package | Not built in this Windows environment. |
 
 ## Decisions and boundaries
@@ -64,10 +72,10 @@
 
 ## Remaining release gates
 
-1. Complete sanitized route, IPC, storage, network, and compiled-artifact scan.
-2. Add a dedicated legacy workspace migration command with dry-run and reconciliation; run it on an authorized copy of user data.
+1. Complete sanitized route, IPC, storage, network, and compiled-artifact scan; decide/document the code license, third-party notices, asset provenance, and required attribution.
+2. Run the migration and backup/restore workflow on an authorized copy of real user data.
 3. Verify two independently configured synthetic profiles against the same report and export contracts.
-4. Exercise backup/restore, migration failure recovery, provider behavior, and guarded writes.
+4. Exercise backup/restore, injected migration copy/manifest failures and rollback, provider behavior, and guarded writes.
 5. Run a real renderer E2E walkthrough, accessibility checks, report/export parity checks, and declared-size performance measurements.
 6. Produce and inspect the supported Windows package, then record its hashes and environment.
-7. Obtain the authorized GitHub target and deliver the exact reviewed commit without rewriting unknown history.
+7. Query the remote branch, deliver the reviewed commit through the agreed review path without rewriting history, and record CI results.

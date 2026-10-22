@@ -47,6 +47,8 @@ Delivery reports cover sprint scope and completion, estimates, flow, carryover, 
 
 Raw Jira JSON and imported history are retained as evidence; normalized projections and report caches are rebuildable. Profile files exclude credentials. Workspace backups are verified before restore, and restore keeps a recoverable pre-restore database. Jira URLs require HTTPS and are checked against the configured host/network policy. Credentials are protected through the operating system's local credential protection when saved.
 
+Use the dry-run-first [`workspace migration guide`](docs/workspace-migration.md) before moving a legacy SQLite workspace. Migration writes a new database and leaves its source in place.
+
 The application includes a local Vazirmatn font. Date, time, and number formatting use the active profile locale and time zone. The current interface remains primarily Persian with mixed English terminology; complete English translation and accessibility review are still open release work.
 
 ## Developer checks
@@ -55,7 +57,8 @@ The application includes a local Vazirmatn font. Date, time, and number formatti
 npm run test:configuration
 npm run test:data-access
 npm run test:workspaces
+npm run test:migration
 npm run build
 ```
 
-These checks cover configuration normalization and revision history, SQLite data access and report/cache behavior, and workspace isolation. They do not establish live Jira compatibility, full migration of a user-owned legacy database, end-to-end UI accessibility, large-workspace performance, or a release package. See [`docs/implementation-progress.md`](docs/implementation-progress.md) for the current gate record.
+These checks cover configuration normalization and revision history, SQLite data access and report/cache behavior, workspace isolation, and synthetic migration reconciliation. The renderer-only fixture at `/tools/renderer-harness.html` uses an in-memory bridge and does not verify Electron IPC or persistence. The checks do not establish live Jira compatibility, migration of a user-owned database, full UI accessibility, large-workspace performance, or a release package. See [`docs/implementation-progress.md`](docs/implementation-progress.md) for the current gate record.

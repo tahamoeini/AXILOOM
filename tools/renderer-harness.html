@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en-US" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Axiloom renderer smoke</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      (() => {
+        const config = {
+          schemaVersion: 1,
+          configurationRevision: 1,
+          migrationStatus: 'configured',
+          migrationWarnings: [],
+          organization: { name: 'Synthetic organization', locale: 'en-US', timeZone: 'UTC' },
+          workspaceName: 'Renderer smoke workspace',
+          sourceInstance: { id: 'synthetic-source', provider: 'offline-json', displayName: 'Synthetic fixture', endpoint: '' },
+          jiraUrl: '',
+          projects: [],
+          projectRoles: { productIntake: [], technicalDelivery: [], commitments: [] },
+          teams: [],
+          boardRoutes: [],
+          fieldMappings: [],
+          workClassifications: [],
+          issueTypeClassifications: [],
+          workflows: {
+            delivery: { completedStatuses: [], startedStatuses: [], blockedStatuses: [], cancelledStatuses: [], milestones: [] },
+            intake: { completedStatuses: [], milestones: [] },
+            commitment: { entryStatuses: [], completedStatuses: [], milestones: [] },
+          },
+          calendar: { configured: false, timeZone: 'UTC', workingDays: [], hoursPerDay: 8, holidays: [], workIntervals: [] },
+          modules: {
+            delivery: false,
+            portfolio: false,
+            objectives: true,
+            productIntelligence: true,
+            productIntake: false,
+            commitments: false,
+            businessSprint: false,
+            outcomes: true,
+            organizationAnalytics: false,
+          },
+          hoursPerDay: 8,
+          doneStatuses: [],
+          adhocTag: '',
+          planningLookback: 5,
+          predictabilityLookback: 5,
+          minForecastCoverage: 0.7,
+          minimumTimeDataCoverage: 0.7,
+          capacityWarning: 0.9,
+          capacityCritical: 1,
+          adhocHoursWarning: 0.3,
+          unspecifiedOpTypeWarning: 0.1,
+          capacityOverrides: [],
+          stakeholderContactPoints: [],
+        };
+        const snapshot = {
+          summary: {
+            issueCount: 0, projectCounts: [], epicCount: 0, sprintCount: 0, reportableSprints: 0,
+            relationCount: 0, warningCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null,
+            openActions: 0, openRequests: 0, decisions: 0, outcomes: 0,
+          },
+          teams: [], projects: [], sprintMetrics: [], people: [], issues: [], issueTotal: 0,
+          epics: [], records: [], links: [],
+          business: { summary: {}, issues: [], statuses: [], components: [], assignees: [], componentAssignees: [], agingBuckets: [], monthly: [], ageMethod: '' },
+          jiraIssueLinks: [], localIssueLinks: [],
+          quality: { findings: [], fieldCoverage: {}, unknownFields: [], incompleteHistories: 0, issuesWithoutHistory: 0, conflicts: 0, evidence: { issueRevisions: 0, issueHistoryEvents: 0, sprintRevisions: 0, localLinkEvents: 0 } },
+          importRuns: [],
+        };
+        window.__AXILOOM_SMOKE__ = { config, snapshot };
+        window.axiloom = {
+          getSnapshot: async () => snapshot,
+          getConfig: async () => config,
+          getCurrentUser: async () => null,
+          getIssueOverviewStats: async () => ({ issueCount: 0, openCount: 0, epicLinkedCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null, projectCounts: [] }),
+          listIssues: async () => ({ issues: [], total: 0 }),
+          getCalendarPeriodReport: async () => ({ created: 0, completed: 0, completedWithoutResolution: 0, previousCreated: null, previousCompleted: null, monthly: [] }),
+          getBusinessBoardReport: async () => ({ summary: {}, issues: [], total: 0 }),
+          getBusinessSprints: async () => [],
+          getBusinessSprintReport: async () => ({ summary: {}, issues: [] }),
+          getIssueFilterOptions: async () => ({ statuses: [], priorities: [], assignees: [], components: [] }),
+          onImportProgress: () => () => {},
+          onJiraProgress: () => () => {},
+          saveRecord: async ({ id, kind, title, payload }) => {
+            const timestamp = new Date().toISOString();
+            const record = { id: id || `smoke-${snapshot.records.length + 1}`, kind, title, payload, createdAt: timestamp, updatedAt: timestamp, history: [{ eventType: 'created', occurredAt: timestamp, payload }] };
+            snapshot.records = snapshot.records.filter((current) => current.id !== record.id).concat(record);
+            return record;
+          },
+          archiveRecord: async (id) => { snapshot.records = snapshot.records.filter((record) => record.id !== id); },
+          exportXlsx: async () => ({ ok: true }),
+          exportPdf: async () => ({ ok: true }),
+        };
+      })();
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
