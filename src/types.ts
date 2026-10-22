@@ -279,7 +279,7 @@ export interface AxiloomApi {
   testJira: () => Promise<{ ok: boolean; displayName: string; account: string }>;
   startSync: (resume: boolean) => Promise<{ started: boolean }>;
   cancelSync: () => Promise<{ requested: boolean }>;
-  getSourceProviderCapabilities: () => Promise<{ id: string; label: string; authentication: string; capabilities: Record<string, boolean> }>;
+  getSourceProviderCapabilities: (providerId?: string) => Promise<{ id: string; label: string; authentication: string; capabilities: Record<string, boolean> }>;
   onImportProgress: (callback: (progress: Record<string, any>) => void) => () => void;
   onJiraProgress: (callback: (progress: Record<string, any>) => void) => () => void;
 }

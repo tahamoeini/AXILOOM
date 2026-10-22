@@ -69,7 +69,7 @@
           quality: { findings: [], fieldCoverage: {}, unknownFields: [], incompleteHistories: 0, issuesWithoutHistory: 0, conflicts: 0, evidence: { issueRevisions: 0, issueHistoryEvents: 0, sprintRevisions: 0, localLinkEvents: 0 } },
           importRuns: [],
         };
-        const smoke = { config, snapshot, importCalls: 0, exportCalls: 0, saveCalls: 0, confirmations: [] };
+        const smoke = { config, snapshot, importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };
         window.__AXILOOM_SMOKE__ = smoke;
         window.confirm = (message) => { smoke.confirmations.push(String(message)); return true; };
         window.axiloom = {
@@ -80,7 +80,17 @@
             workspaces: [{ id: 'default', name: config.workspaceName, active: true, path: 'synthetic-fixture', createdAt: '2026-01-01T00:00:00.000Z' }],
           }),
           getConfigurationHistory: async () => [],
-          getSourceProviderCapabilities: async () => ({ id: 'offline-json', label: 'Offline Jira JSON import', authentication: 'none', capabilities: { fileImport: true, projectDiscovery: false, fieldDiscovery: false, readOnlySync: false, userInitiatedWrites: false } }),
+          getSourceProviderCapabilities: async (providerId) => (providerId || config.sourceInstance.provider) === 'jira-datacenter'
+            ? ({ id: 'jira-datacenter', label: 'Jira Server / Data Center', authentication: 'personal-access-token', capabilities: { fileImport: true, projectDiscovery: true, fieldDiscovery: true, readOnlySync: true, userInitiatedWrites: true } })
+            : ({ id: 'offline-json', label: 'Offline Jira JSON import', authentication: 'none', capabilities: { fileImport: true, projectDiscovery: false, fieldDiscovery: false, readOnlySync: false, userInitiatedWrites: false } }),
+          getJiraCatalog: async () => ({ projects: { value: [], updatedAt: '' }, fields: { value: [], updatedAt: '' }, issueTypes: { value: [], updatedAt: '' }, warnings: [] }),
+          testJira: async () => ({ ok: true, displayName: 'Synthetic Jira', account: 'synthetic-user' }),
+          usePat: async (_token, save) => { config.hasSavedPat = Boolean(save); return { connected: true, saved: Boolean(save) }; },
+          forgetPat: async () => { smoke.forgetCalls += 1; config.hasSavedPat = false; return { connected: false, saved: false }; },
+          listPats: async () => { smoke.patListCalls += 1; return [{ id: '9001', name: 'Synthetic UI token', createdAt: 'synthetic date', expiresAt: '' }]; },
+          revokePat: async () => { smoke.revokeCalls += 1; config.hasSavedPat = false; return { revoked: true }; },
+          startSync: async () => { smoke.syncCalls += 1; smoke.jiraProgressHandler?.({ phase: 'issues', fetched: 1, total: 2 }); return { started: true }; },
+          cancelSync: async () => { smoke.cancelCalls += 1; smoke.jiraProgressHandler?.({ phase: 'cancelled' }); return { requested: true }; },
           validateConfig: async (value) => value,
           saveConfig: async (value) => {
             smoke.saveCalls += 1;
@@ -89,10 +99,18 @@
           },
           importConfigProfile: async () => {
             smoke.importCalls += 1;
+            const importedProfile = structuredClone(config);
+            importedProfile.organization.name = 'Imported synthetic profile';
+            importedProfile.jiraUrl = 'https://jira.synthetic.invalid';
+            importedProfile.sourceInstance = {
+              id: 'synthetic-dc-source', provider: 'jira-datacenter', displayName: 'Synthetic Jira DC',
+              endpoint: 'https://jira.synthetic.invalid', networkAccess: { mode: 'private', approvedAddresses: [] },
+            };
+            importedProfile.hasSavedPat = true;
             return {
               canceled: false,
               dryRun: true,
-              profile: { ...structuredClone(config), organization: { ...config.organization, name: 'Imported synthetic profile' } },
+              profile: importedProfile,
             };
           },
           exportConfigProfile: async () => { smoke.exportCalls += 1; return { canceled: false, filePath: 'synthetic-fixture-profile.json' }; },
@@ -105,8 +123,7 @@
           getBusinessSprintReport: async () => ({ summary: {}, issues: [] }),
           getIssueFilterOptions: async () => ({ statuses: [], priorities: [], assignees: [], components: [] }),
           onImportProgress: () => () => {},
-          onJiraProgress: () => () => {},
-          cancelSync: async () => ({ requested: true }),
+          onJiraProgress: (callback) => { smoke.jiraProgressHandler = callback; return () => { smoke.jiraProgressHandler = null; }; },
           saveRecord: async ({ id, kind, title, payload }) => {
             const timestamp = new Date().toISOString();
             const record = { id: id || `smoke-${snapshot.records.length + 1}`, kind, title, payload, createdAt: timestamp, updatedAt: timestamp, history: [{ eventType: 'created', occurredAt: timestamp, payload }] };

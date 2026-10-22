@@ -62,7 +62,7 @@ contextBridge.exposeInMainWorld('axiloom', {
   listPats: () => ipcRenderer.invoke('jira:list-pats'),
   revokePat: (tokenId) => ipcRenderer.invoke('jira:revoke-pat', tokenId),
   testJira: () => ipcRenderer.invoke('jira:test'),
-  getSourceProviderCapabilities: () => ipcRenderer.invoke('jira:provider-capabilities'),
+  getSourceProviderCapabilities: (providerId) => ipcRenderer.invoke('jira:provider-capabilities', providerId),
   startSync: (resume) => ipcRenderer.invoke('jira:start-sync', resume),
   cancelSync: () => ipcRenderer.invoke('jira:cancel-sync'),
   onImportProgress: (callback) => subscribe('import:progress', callback),

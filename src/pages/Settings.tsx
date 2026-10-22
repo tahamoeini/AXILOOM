@@ -64,7 +64,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     window.axiloom.getJiraCatalog(false).then(setCatalog).catch(() => undefined);
   }, [draft?.jiraUrl]);
   useEffect(() => {
-    if (draft?.sourceInstance.provider) window.axiloom.getSourceProviderCapabilities().then(setProviderInfo).catch(() => setProviderInfo(null));
+    if (draft?.sourceInstance.provider) window.axiloom.getSourceProviderCapabilities(draft.sourceInstance.provider).then(setProviderInfo).catch(() => setProviderInfo(null));
   }, [draft?.sourceInstance.provider]);
 
   const projects = useMemo(() => Array.from(new Map([
@@ -280,7 +280,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
         <button className="button secondary" onClick={testConnection} disabled={!draft.jiraUrl || working === 'connection'}><Wifi size={14} /> Test connection</button>
         {jiraProgress && !['done', 'error', 'cancelled'].includes(String(jiraProgress.phase))
           ? <button className="button secondary" onClick={cancelSync} disabled={working === 'cancel-sync'}><Server size={14} /> Cancel sync</button>
-          : <button className="button secondary" onClick={sync} disabled={!draft.jiraUrl || !draft.hasSavedPat || working === 'sync'}><Server size={14} /> Sync read-only</button>}</div>
+          : <button className="button secondary" onClick={sync} disabled={!draft.jiraUrl || !(draft.hasSavedPat || connection?.ok) || working === 'sync'}><Server size={14} /> Sync read-only</button>}</div>
       {catalog && <p className="field-hint">{catalog.projects?.value.length || 0} projects · {catalog.fields?.value.length || 0} fields · {catalog.issueTypes?.value.length || 0} issue types</p>}
       <div className="auth-row"><label className="form-field"><span>Personal access token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Token is never included in the profile" autoComplete="new-password" /></label><label className="check-row"><input type="checkbox" checked={saveToken} onChange={(event) => setSaveToken(event.target.checked)} /><span>Encrypt with OS credential storage</span></label><button className="button secondary" onClick={connect} disabled={!token || working === 'connection'}><KeyRound size={15} /> Use token</button>
         {(draft.hasSavedPat || connection?.ok) && <button className="button secondary" onClick={forgetCredential} disabled={working === 'forget-credential'}><Trash2 size={15} /> Forget credential</button>}

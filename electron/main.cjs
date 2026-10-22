@@ -659,7 +659,7 @@ function registerHandlers() {
     const user = await jiraFetch('rest/api/2/myself', { method: 'GET' }, token);
     return { ok: true, displayName: user?.displayName || '', account: user?.name || user?.key || '' };
   });
-  ipcMain.handle('jira:provider-capabilities', () => describeProvider(getConfig(db).sourceInstance.provider));
+  ipcMain.handle('jira:provider-capabilities', (_event, providerId) => describeProvider(providerId || getConfig(db).sourceInstance.provider));
   ipcMain.handle('jira:current-user', async () => {
     const token = savedPat();
     if (!token) return null;
