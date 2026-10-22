@@ -154,6 +154,16 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
   }
 
   function rowsForPage(): ReactNode[][] {
+    if (page === 'objectives' && targetKind === 'objective') return records.map((record) => {
+      const legacyRelated = snapshot.records.filter((item) => item.payload.objectiveId === record.id);
+      const legacyCount = legacyRelated.filter((item) => ['request', 'action', 'decision', 'meeting', 'outcome'].includes(item.kind)).length;
+      const relationCount = snapshot.relationships.filter((relationship) =>
+        (relationship.sourceType === 'record' && relationship.sourceId === record.id)
+        || (relationship.targetType === 'record' && relationship.targetId === record.id)).length;
+      return [<b className="row-title">{record.title}</b>, String(record.payload.ownerName || '—'), String(record.payload.strategicTheme || '—'),
+        <StatusBadge value={String(record.payload.status || 'Proposed')} />, formatDate(String(record.payload.dueAt || '')),
+        `${legacyCount} legacy field references · ${formatNumber(relationCount, 0)} audited links`, actions(record)];
+    });
     if (page === 'objectives') return records.map((record) => {
       const relationCount = snapshot.relationships.filter((relationship) =>
         (relationship.sourceType === 'record' && relationship.sourceId === record.id)
@@ -233,7 +243,8 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
     return summaryOnly ? window.axiloom.exportPdf(report) : window.axiloom.exportXlsx(report);
   }
 
-  const headers = page === 'objectives' ? ['نوع ثبت', 'عنوان', 'مسئول', 'وضعیت', 'موعد', 'ارتباطات صریح', '']
+  const headers = page === 'objectives' && targetKind === 'objective' ? ['Objective', 'Owner', 'Strategic theme', 'Status', 'Target date', 'Legacy references · audited links', '']
+    : page === 'objectives' ? ['نوع ثبت', 'عنوان', 'مسئول', 'وضعیت', 'موعد', 'ارتباطات صریح', '']
     : targetKind === 'action' ? ['تعهد', 'مالک', 'درخواست‌دهنده', 'موعد', 'وضعیت', 'وابستگی / انتظار', 'پیگیری Jira', '']
     : targetKind === 'request' ? ['درخواست محصول', 'درخواست‌دهنده / واحد', 'مالک محصول', 'وضعیت', 'اهمیت', 'مرجع بیرونی', 'سن مشاهده‌شده', 'تحویل مرتبط', '']
       : targetKind === 'decision' ? ['عنوان تصمیم', 'تاریخ', 'تصمیم‌گیر', 'Jira related', 'جلسه', 'وضعیت', 'تصمیم صریح', '']

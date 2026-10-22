@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://axiloom.dev/schemas/config-profile.v3.json",
+  "$id": "https://axiloom.dev/schemas/config-profile.v4.json",
   "title": "Axiloom configuration profile",
   "type": "object",
   "additionalProperties": true,
-  "required": ["schemaVersion", "organization", "sourceInstance", "projects", "projectRoles", "teams", "boardRoutes", "fieldMappings", "workflows", "calendar", "modules"],
+  "required": ["schemaVersion", "organization", "sourceInstance", "projects", "projectRoles", "teams", "boardRoutes", "fieldMappings", "workflows", "calendar", "modules", "recordTemplates"],
   "$defs": {
     "workflow": {
       "type": "object",
@@ -35,10 +35,49 @@
       },
       "additionalProperties": false
     },
-    "statusNames": { "type": "array", "uniqueItems": true, "items": { "type": "string", "maxLength": 160 } }
+    "statusNames": { "type": "array", "uniqueItems": true, "items": { "type": "string", "maxLength": 160 } },
+    "workInterval": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" },
+        "end": { "type": "string", "pattern": "^(?:([01]\\d|2[0-3]):[0-5]\\d|24:00)$" },
+        "weekdays": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 6 } }
+      },
+      "additionalProperties": false
+    },
+    "recordField": {
+      "type": "object",
+      "required": ["key", "label", "type"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,79}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "type": { "enum": ["text", "textarea", "date", "enum", "recordRef", "issueRef", "issueRefList", "number", "boolean"] },
+        "required": { "type": "boolean" },
+        "options": { "type": "array", "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "maxLength": 160 } },
+        "referenceKinds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,39}$" } }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "enum" } }, "required": ["type"] }, "then": { "properties": { "options": { "minItems": 1 } } } },
+        { "if": { "properties": { "type": { "const": "recordRef" } }, "required": ["type"] }, "then": { "properties": { "referenceKinds": { "minItems": 1 } } } }
+      ]
+    },
+    "recordTemplate": {
+      "type": "object",
+      "required": ["kind", "label", "group", "enabled", "fields"],
+      "properties": {
+        "kind": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,39}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "group": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,39}$" },
+        "enabled": { "type": "boolean" },
+        "fields": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/recordField" } }
+      },
+      "additionalProperties": false
+    }
   },
   "properties": {
-    "schemaVersion": { "const": 3 },
+    "schemaVersion": { "const": 4 },
     "configurationRevision": { "type": "integer", "minimum": 0 },
     "organization": {
       "type": "object",
@@ -129,18 +168,7 @@
         "additionalProperties": false
       }
     },
-    "modules": { "type": "object", "additionalProperties": { "type": "boolean" } }
-  },
-  "$defs": {
-    "workInterval": {
-      "type": "object",
-      "required": ["start", "end"],
-      "properties": {
-        "start": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" },
-        "end": { "type": "string", "pattern": "^(?:([01]\\d|2[0-3]):[0-5]\\d|24:00)$" },
-        "weekdays": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 6 } }
-      },
-      "additionalProperties": false
-    }
+    "modules": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "recordTemplates": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/recordTemplate" } }
   }
 }

@@ -253,9 +253,17 @@ function safeRecord(input, config) {
     const value = payload[field.key];
     const present = Array.isArray(value) ? value.length > 0 : typeof value === 'boolean' ? true : String(value ?? '').trim() !== '';
     if (field.required && !present) throw new Error(`فیلد «${field.label}» ضروری است.`);
-    if (field.type === 'enum' && present && !field.options.includes(String(value))) throw new Error(`مقدار «${field.label}» در قالب فعال تعریف نشده است.`);
-    if (field.type === 'number' && present && !Number.isFinite(Number(value))) throw new Error(`فیلد «${field.label}» باید عدد معتبر باشد.`);
-    if (field.type === 'boolean' && present && typeof value !== 'boolean') throw new Error(`فیلد «${field.label}» باید بله یا خیر باشد.`);
+    if (!present) continue;
+    if (field.type === 'enum' && !field.options.includes(String(value))) throw new Error(`مقدار «${field.label}» در قالب فعال تعریف نشده است.`);
+    if (field.type === 'number' && !Number.isFinite(Number(value))) throw new Error(`فیلد «${field.label}» باید عدد معتبر باشد.`);
+    if (field.type === 'boolean' && typeof value !== 'boolean') throw new Error(`فیلد «${field.label}» باید بله یا خیر باشد.`);
+    if (['text', 'textarea', 'date', 'recordRef', 'issueRef'].includes(field.type) && typeof value !== 'string') throw new Error(`فیلد «${field.label}» باید متن معتبر باشد.`);
+    if (field.type === 'date' && !Number.isFinite(Date.parse(value))) throw new Error(`فیلد «${field.label}» باید تاریخ معتبر باشد.`);
+    if (field.type === 'issueRef' && !/^[A-Z][A-Z0-9_]*-\d+$/.test(value)) throw new Error(`فیلد «${field.label}» باید کلید Jira معتبر داشته باشد.`);
+    if (field.type === 'issueRefList' && (!Array.isArray(value) || value.length > 500 || value.some((key) => typeof key !== 'string' || !/^[A-Z][A-Z0-9_]*-\d+$/.test(key)))) {
+      throw new Error(`فیلد «${field.label}» باید فهرستی از کلیدهای Jira معتبر داشته باشد.`);
+    }
+    if (typeof value === 'string' && value.length > (field.type === 'textarea' ? 10000 : 2000)) throw new Error(`فیلد «${field.label}» بیش از حد طولانی است.`);
   }
   return { kind: input.kind, title: title.slice(0, 500), payload };
 }
