@@ -8,3 +8,4 @@ workspace/
 *.sqlite-shm
 *.sqlite-wal
 *.p360
+.test-tmp/

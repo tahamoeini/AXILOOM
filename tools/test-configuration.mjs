@@ -13,7 +13,7 @@ assert.deepEqual(DEFAULT_CONFIG.teams, []);
 assert.deepEqual(DEFAULT_CONFIG.fieldMappings, []);
 assert.equal(DEFAULT_CONFIG.calendar.configured, false);
 assert.equal(DEFAULT_CONFIG.modules.businessSprint, false);
-assert.throws(() => validateConfig({ schemaVersion: 2 }), /newer than the supported version 1/,
+assert.throws(() => validateConfig({ schemaVersion: 3 }), /newer than the supported version 2/,
   'profiles from a newer schema must fail instead of being downgraded');
 assert.throws(() => validateConfig({ schemaVersion: 1.5 }), /non-negative integer/,
   'fractional schema versions must fail validation');
@@ -42,12 +42,16 @@ const profile = validateConfig({
   modules: { delivery: true, portfolio: true },
 });
 
+assert.equal(profile.schemaVersion, 2, 'version 1 profiles migrate with private network access as the default');
+assert.deepEqual(profile.sourceInstance.networkAccess, { mode: 'private', approvedAddresses: [] });
 assert.equal(profile.boardRoutes[0].team, 'Platform');
 assert.equal(profile.fieldMappings[0].providerFieldId, 'customfield_12345');
 assert.deepEqual(profile.projectRoles.productIntake, ['IDEAS']);
 assert.equal(profile.calendar.timeZone, 'Europe/Berlin');
 assert.notEqual(configurationFingerprint(profile), configurationFingerprint({ ...profile, organization: { ...profile.organization, name: 'Another Studio' } }));
+assert.notEqual(configurationFingerprint(profile), configurationFingerprint({ ...profile, sourceInstance: { ...profile.sourceInstance, networkAccess: { mode: 'public-pinned', approvedAddresses: ['8.8.8.8'] } } }));
 assert.equal(sourceIdentityKey(profile), sourceIdentityKey({ ...profile, organization: { ...profile.organization, name: 'Another Studio' } }));
+assert.equal(sourceIdentityKey(profile), sourceIdentityKey({ ...profile, sourceInstance: { ...profile.sourceInstance, networkAccess: { mode: 'public-pinned', approvedAddresses: ['8.8.8.8'] } } }), 'network access policy does not change source identity');
 assert.notEqual(sourceIdentityKey(profile), sourceIdentityKey({ ...profile, jiraUrl: 'https://jira-secondary.example.test/context' }));
 
 const migrated = normalizeConfig({
@@ -64,6 +68,11 @@ assert.equal(migrated.calendar.configured, false);
 
 assert.throws(() => validateConfig({ projects: ['BAD KEY'] }), /Invalid project key/);
 assert.throws(() => validateConfig({ jiraUrl: 'http://jira.example.test' }), /HTTPS/);
+assert.throws(() => validateConfig({ jiraUrl: 'https://jira.example.test', sourceInstance: { provider: 'jira-datacenter', networkAccess: { mode: 'public-pinned', approvedAddresses: [] } } }), /requires at least one administrator-approved/);
+assert.throws(() => validateConfig({ jiraUrl: 'https://jira.example.test', sourceInstance: { provider: 'jira-datacenter', networkAccess: { mode: 'public-pinned', approvedAddresses: ['127.0.0.1'] } } }), /globally routable IPv4/);
+assert.throws(() => validateConfig({ jiraUrl: 'https://jira.example.test', sourceInstance: { provider: 'jira-datacenter', networkAccess: { mode: 'public-pinned', approvedAddresses: ['198.51.100.7'] } } }), /globally routable IPv4/);
+const pinnedPublicProfile = validateConfig({ jiraUrl: 'https://jira.example.test', sourceInstance: { provider: 'jira-datacenter', networkAccess: { mode: 'public-pinned', approvedAddresses: ['8.8.8.8'] } } });
+assert.deepEqual(pinnedPublicProfile.sourceInstance.networkAccess.approvedAddresses, ['8.8.8.8']);
 assert.throws(() => validateConfig({ sourceInstance: { id: 'source-a', provider: 'jira-datacenter', endpoint: 'https://user:secret@jira.example.test' } }), /Credentials must not be embedded/);
 assert.throws(() => validateConfig({ sourceInstance: { id: 'source-a', provider: 'jira-datacenter', endpoint: 'https://jira.example.test?token=secret' } }), /query or fragment/);
 assert.throws(() => validateConfig({ projects: ['OPS'], fieldMappings: [{ semanticKey: 'storyPoints', providerFieldId: '$.fields.inject' }] }), /Invalid provider field ID/);

@@ -2,11 +2,11 @@ const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('ele
 const { Worker } = require('node:worker_threads');
 const { DatabaseSync } = require('node:sqlite');
 const { randomUUID } = require('node:crypto');
-const { promises: dns } = require('node:dns');
 const fs = require('node:fs');
 const path = require('node:path');
 const { openDatabase, getConfig, saveConfig, saveIssue, saveSprint, saveLocalIssueLink, removeLocalIssueLink, getIssueDetails, getIssueActivity, getSprintDetails, listIssues, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport, getBusinessBoardReport } = require('./database.cjs');
 const { sourceIdentityKey } = require('./configuration.cjs');
+const { createOfflineAdapter, createProviderAdapter, describeProvider, parseJiraBaseUrl } = require('./jira-providers.cjs');
 const { writeWorkbook } = require('./xlsx.cjs');
 const workspaceRegistry = require('./workspaces.cjs');
 
@@ -257,59 +257,12 @@ function createRecordEvent(recordId, eventType, payload) {
     .run(recordId, eventType, new Date().toISOString(), JSON.stringify(payload));
 }
 
-async function privateHost(hostname) {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host.includes(':') || /^\d+(?:\.\d+){3}$/.test(host)) {
-    if (!isPrivateAddress(host)) throw new Error('آدرس Jira باید به IP خصوصی شبکهٔ داخلی اشاره کند.');
-    return true;
-  }
-  let addresses;
-  try { addresses = await dns.lookup(host, { all: true, verbatim: true }); }
-  catch { throw new Error('نام سرور Jira در شبکهٔ محلی resolve نشد. آدرس و DNS داخلی را بررسی کنید.'); }
-  if (!addresses.length || addresses.some(({ address }) => !isPrivateAddress(address))) {
-    throw new Error('برای جلوگیری از ارسال اطلاعات یا PAT به اینترنت، آدرس Jira باید به IP خصوصی شبکهٔ داخلی resolve شود.');
-  }
-  return true;
-}
-
-function isPrivateAddress(address) {
-  const ip = address.toLowerCase().replace(/^::ffff:/, '');
-  if (ip.includes(':')) return ip === '::1' || /^f[cd]/.test(ip) || /^fe[89ab]/.test(ip);
-  const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
-  return parts[0] === 10 || parts[0] === 127 || (parts[0] === 169 && parts[1] === 254)
-    || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
-    || (parts[0] === 192 && parts[1] === 168);
-}
-
 function jiraBaseUrl() {
-  const value = getConfig(db).jiraUrl;
-  let url;
-  try { url = new URL(value); } catch { throw new Error('آدرس Jira معتبر نیست.'); }
-  if (url.protocol !== 'https:') throw new Error('اتصال Jira باید از HTTPS استفاده کند تا PAT و اطلاعات ورود رمزگذاری شوند.');
-  url.pathname = url.pathname.replace(/\/$/, '');
-  url.search = '';
-  url.hash = '';
-  return url;
+  return parseJiraBaseUrl(getConfig(db).jiraUrl);
 }
 
-async function jiraFetch(resourcePath, options = {}, token = sessionPat) {
-  const base = jiraBaseUrl();
-  await privateHost(base.hostname);
-  const target = new URL(resourcePath.replace(/^\//, ''), `${base.toString().replace(/\/$/, '')}/`);
-  if (target.origin !== base.origin) throw new Error('Jira پاسخ را به یک دامنهٔ دیگر redirect کرد؛ درخواست متوقف شد.');
-  const headers = { Accept: 'application/json', ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(target, { ...options, headers, redirect: 'manual', signal: AbortSignal.timeout(60000) });
-  if (response.status >= 300 && response.status < 400) throw new Error('Jira درخواست را redirect کرد؛ آدرس پایه و تنظیم reverse proxy را بررسی کنید.');
-  const bodyText = await response.text();
-  const body = bodyText ? safeJson(bodyText, bodyText) : null;
-  if (!response.ok) {
-    const details = typeof body === 'string' ? body : body?.errorMessages?.join('، ') || body?.message || body?.errors && JSON.stringify(body.errors) || response.statusText;
-    throw new Error(`Jira (${response.status}): ${String(details).slice(0, 500)}`);
-  }
-  return body;
+function jiraFetch(resourcePath, options = {}, token = sessionPat) {
+  return createProviderAdapter(getConfig(db), token).request(resourcePath, options);
 }
 
 function savedPat() {
@@ -330,8 +283,14 @@ function rememberPat(token, save) {
     const encrypted = safeStorage.encryptString(clean).toString('base64');
     db.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at')
       .run('jira_pat_encrypted', JSON.stringify(encrypted), new Date().toISOString());
-  }
+  } else db.prepare('DELETE FROM settings WHERE key=?').run('jira_pat_encrypted');
   return { connected: true, saved: Boolean(save) };
+}
+
+function forgetPat() {
+  sessionPat = '';
+  db.prepare('DELETE FROM settings WHERE key=?').run('jira_pat_encrypted');
+  return { connected: false, saved: false };
 }
 
 function registerHandlers() {
@@ -448,25 +407,18 @@ function registerHandlers() {
 
   ipcMain.handle('import:begin', (_event, requestedSourceName) => {
     if (workspaceMaintenance || workspaceBackupInProgress || activeImportRun || syncWorker) throw new Error('همگام‌سازی، پشتیبان‌گیری یا import دیگری در حال اجراست.');
-    const sourceName = String(requestedSourceName || '').trim();
-    if (!sourceName || sourceName.length > 160 || /[\u0000-\u001f\u007f]/.test(sourceName)) throw new Error('Confirm a valid source name before importing Jira files.');
     let config = getConfig(db);
-    const currentSourceName = String(config.sourceInstance.displayName || '').trim();
-    const sameSourceName = !currentSourceName || currentSourceName.toLocaleLowerCase('en-US') === sourceName.toLocaleLowerCase('en-US');
-    if (!sameSourceName) throw new Error(`This workspace is bound to "${currentSourceName}". Use a separate workspace for another Jira source.`);
-    if (!currentSourceName || config.sourceInstance.provider === 'offline-json' && !config.sourceInstance.id) {
-      const sourceInstance = {
-        ...config.sourceInstance,
-        id: config.sourceInstance.id || randomUUID(),
-        displayName: currentSourceName || sourceName,
-      };
-      config = saveConfig(db, { ...config, sourceInstance }, 'offline-source-attested');
+    const attestation = createOfflineAdapter(config, randomUUID).attestImportSource(requestedSourceName);
+    if (attestation.changed) {
+      const eventType = config.sourceInstance.provider === 'offline-json' ? 'offline-source-attested' : 'source-label-attested';
+      config = saveConfig(db, { ...config, sourceInstance: attestation.sourceInstance }, eventType);
       invalidateSnapshot();
     }
+    const sourceName = attestation.sourceInstance.displayName || config.sourceInstance.displayName;
     activeImportRun = randomUUID();
     db.prepare('INSERT INTO import_runs(id,started_at,files_json) VALUES(?,?,?)').run(activeImportRun, new Date().toISOString(), '[]');
     invalidateSnapshot();
-    return { runId: activeImportRun, sourceInstanceId: config.sourceInstance.id, sourceName: config.sourceInstance.displayName || sourceName };
+    return { runId: activeImportRun, sourceInstanceId: config.sourceInstance.id, sourceName };
   });
   ipcMain.handle('import:register-file', (_event, meta) => {
     if (!activeImportRun) throw new Error('نشست import آغاز نشده است.');
@@ -672,33 +624,33 @@ function registerHandlers() {
   });
 
   ipcMain.handle('jira:use-pat', (_event, token, save) => rememberPat(token, save));
+  ipcMain.handle('jira:forget-pat', () => forgetPat());
   ipcMain.handle('jira:create-pat', async (_event, username, password, name, expiryDays, save) => {
     if (!String(username || '').trim() || !String(password || '')) throw new Error('نام کاربری و رمز عبور را وارد کنید.');
-    const base = jiraBaseUrl();
-    await privateHost(base.hostname);
     const basic = Buffer.from(`${username}:${password}`).toString('base64');
-    const response = await fetch(new URL('rest/pat/latest/tokens', `${base.toString().replace(/\/$/, '')}/`), {
+    const body = await jiraFetch('rest/pat/latest/tokens', {
       method: 'POST',
       headers: { Authorization: `Basic ${basic}`, Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: String(name || 'Axiloom').slice(0, 80), expirationDuration: Math.max(1, Math.min(365, Number(expiryDays) || 30)) }),
-      redirect: 'manual',
-      signal: AbortSignal.timeout(60000),
-    });
-    if (response.status >= 300 && response.status < 400) throw new Error('Jira API ساخت PAT redirect کرد؛ درخواست متوقف شد.');
-    const bodyText = await response.text();
-    const body = bodyText ? safeJson(bodyText, {}) : {};
-    if (!response.ok) throw new Error(`ساخت PAT در Jira ناموفق بود (${response.status}): ${body?.message || response.statusText}`);
+    }, '');
     const token = body.rawToken || body.token || body.tokenString || body.password || '';
     const saved = token ? rememberPat(token, save) : { connected: false, saved: false };
     return { created: true, token: token || null, metadata: { id: body.id || body.tokenId || '', name: body.name || name, createdAt: body.createdAt || body.created || '', expiresAt: body.expirationTime || body.expiresAt || '' }, saved };
   });
   ipcMain.handle('jira:list-pats', async () => {
     const body = await jiraFetch('rest/pat/latest/tokens', { method: 'GET' }, savedPat());
-    return Array.isArray(body) ? body : body?.tokens || [];
+    const records = Array.isArray(body) ? body : body?.tokens || [];
+    return records.filter((item) => /^\d+$/.test(String(item?.id ?? item?.tokenId ?? ''))).map((item) => ({
+      id: String(item.id ?? item.tokenId),
+      name: String(item.name || ''),
+      createdAt: String(item.createdAt || item.created || ''),
+      expiresAt: String(item.expirationTime || item.expiresAt || ''),
+    }));
   });
   ipcMain.handle('jira:revoke-pat', async (_event, tokenId) => {
     if (!/^\d+$/.test(String(tokenId))) throw new Error('شناسهٔ PAT معتبر نیست.');
     await jiraFetch(`rest/pat/latest/tokens/${encodeURIComponent(tokenId)}`, { method: 'DELETE' }, savedPat());
+    forgetPat();
     return { revoked: true };
   });
   ipcMain.handle('jira:test', async () => {
@@ -707,6 +659,7 @@ function registerHandlers() {
     const user = await jiraFetch('rest/api/2/myself', { method: 'GET' }, token);
     return { ok: true, displayName: user?.displayName || '', account: user?.name || user?.key || '' };
   });
+  ipcMain.handle('jira:provider-capabilities', () => describeProvider(getConfig(db).sourceInstance.provider));
   ipcMain.handle('jira:current-user', async () => {
     const token = savedPat();
     if (!token) return null;
@@ -732,7 +685,7 @@ function registerHandlers() {
         mainWindow?.webContents.send('jira:progress', message.value);
         return;
       }
-      if (message.type === 'done' || message.type === 'error') {
+      if (message.type === 'done' || message.type === 'error' || message.type === 'cancelled') {
         terminalMessageReceived = true;
         invalidateSnapshot();
         mainWindow?.webContents.send('jira:progress', { phase: message.type, ...(message.value || {}), error: message.error || '' });
@@ -755,6 +708,11 @@ function registerHandlers() {
       if (syncWorker === worker) syncWorker = null;
     });
     return { started: true };
+  });
+  ipcMain.handle('jira:cancel-sync', () => {
+    if (!syncWorker) return { requested: false };
+    syncWorker.postMessage({ type: 'cancel' });
+    return { requested: true };
   });
 }
 

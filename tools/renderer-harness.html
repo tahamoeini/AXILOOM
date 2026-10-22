@@ -10,13 +10,13 @@
     <script>
       (() => {
         const config = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           configurationRevision: 1,
           migrationStatus: 'configured',
           migrationWarnings: [],
           organization: { name: 'Synthetic organization', locale: 'en-US', timeZone: 'UTC' },
           workspaceName: 'Renderer smoke workspace',
-          sourceInstance: { id: 'synthetic-source', provider: 'offline-json', displayName: 'Synthetic fixture', endpoint: '' },
+          sourceInstance: { id: 'synthetic-source', provider: 'offline-json', displayName: 'Synthetic fixture', endpoint: '', networkAccess: { mode: 'private', approvedAddresses: [] } },
           jiraUrl: '',
           projects: [],
           projectRoles: { productIntake: [], technicalDelivery: [], commitments: [] },
@@ -80,6 +80,7 @@
             workspaces: [{ id: 'default', name: config.workspaceName, active: true, path: 'synthetic-fixture', createdAt: '2026-01-01T00:00:00.000Z' }],
           }),
           getConfigurationHistory: async () => [],
+          getSourceProviderCapabilities: async () => ({ id: 'offline-json', label: 'Offline Jira JSON import', authentication: 'none', capabilities: { fileImport: true, projectDiscovery: false, fieldDiscovery: false, readOnlySync: false, userInitiatedWrites: false } }),
           validateConfig: async (value) => value,
           saveConfig: async (value) => {
             smoke.saveCalls += 1;
@@ -105,6 +106,7 @@
           getIssueFilterOptions: async () => ({ statuses: [], priorities: [], assignees: [], components: [] }),
           onImportProgress: () => () => {},
           onJiraProgress: () => () => {},
+          cancelSync: async () => ({ requested: true }),
           saveRecord: async ({ id, kind, title, payload }) => {
             const timestamp = new Date().toISOString();
             const record = { id: id || `smoke-${snapshot.records.length + 1}`, kind, title, payload, createdAt: timestamp, updatedAt: timestamp, history: [{ eventType: 'created', occurredAt: timestamp, payload }] };

@@ -47,11 +47,13 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
 }) {
   const [draft, setDraft] = useState<AppConfig | null>(config);
   const [catalog, setCatalog] = useState<JiraCatalog | null>(null);
+  const [providerInfo, setProviderInfo] = useState<Awaited<ReturnType<typeof window.axiloom.getSourceProviderCapabilities>> | null>(null);
   const [workspaceInfo, setWorkspaceInfo] = useState<WorkspaceInfo | null>(null);
   const [working, setWorking] = useState('');
   const [token, setToken] = useState('');
   const [saveToken, setSaveToken] = useState(false);
   const [connection, setConnection] = useState<{ ok: boolean; displayName: string; account: string } | null>(null);
+  const [patRecords, setPatRecords] = useState<Array<{ id: string; name: string; createdAt: string; expiresAt: string }> | null>(null);
 
   useEffect(() => { if (config) setDraft(config); }, [config]);
   useEffect(() => {
@@ -61,6 +63,9 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     if (!draft?.jiraUrl) { setCatalog(null); return; }
     window.axiloom.getJiraCatalog(false).then(setCatalog).catch(() => undefined);
   }, [draft?.jiraUrl]);
+  useEffect(() => {
+    if (draft?.sourceInstance.provider) window.axiloom.getSourceProviderCapabilities().then(setProviderInfo).catch(() => setProviderInfo(null));
+  }, [draft?.sourceInstance.provider]);
 
   const projects = useMemo(() => Array.from(new Map([
     ...(catalog?.projects?.value || []).map((project) => [project.key, project.name] as const),
@@ -70,6 +75,10 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
 
   const update = <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => setDraft((current) => current ? { ...current, [key]: value } : current);
   const updateSourceName = (displayName: string) => update('sourceInstance', { ...draft.sourceInstance, displayName });
+  const updateNetworkAccess = (patch: Partial<AppConfig['sourceInstance']['networkAccess']>) => update('sourceInstance', {
+    ...draft.sourceInstance,
+    networkAccess: { ...draft.sourceInstance.networkAccess, ...patch },
+  });
   const updateRole = (role: string, projectKey: string, selected: boolean) => {
     const next = { ...draft.projectRoles };
     const current = next[role] || [];
@@ -170,6 +179,41 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     catch (error) { notify({ tone: 'error', text: error instanceof Error ? error.message : 'Synchronization did not start.' }); }
     finally { setWorking(''); }
   };
+  const cancelSync = async () => {
+    setWorking('cancel-sync');
+    try { await window.axiloom.cancelSync(); notify({ tone: 'info', text: 'Synchronization cancellation requested.' }); }
+    catch (error) { notify({ tone: 'error', text: error instanceof Error ? error.message : 'Synchronization could not be cancelled.' }); }
+    finally { setWorking(''); }
+  };
+  const forgetCredential = async () => {
+    setWorking('forget-credential');
+    try {
+      await window.axiloom.forgetPat();
+      setConnection(null);
+      setPatRecords(null);
+      setDraft((current) => current ? { ...current, hasSavedPat: false } : current);
+      notify({ tone: 'success', text: 'The local Jira credential was removed.' });
+    } catch (error) { notify({ tone: 'error', text: error instanceof Error ? error.message : 'The local credential could not be removed.' }); }
+    finally { setWorking(''); }
+  };
+  const loadPatRecords = async () => {
+    setWorking('pat-list');
+    try { setPatRecords(await window.axiloom.listPats()); }
+    catch (error) { notify({ tone: 'error', text: error instanceof Error ? error.message : 'Jira token list could not be loaded.' }); }
+    finally { setWorking(''); }
+  };
+  const revokePat = async (pat: { id: string; name: string }) => {
+    if (!window.confirm(`Revoke “${pat.name || pat.id}” in Jira? This also removes the local credential used by Axiloom.`)) return;
+    setWorking('pat-revoke');
+    try {
+      await window.axiloom.revokePat(pat.id);
+      setPatRecords((current) => current?.filter((item) => item.id !== pat.id) || []);
+      setConnection(null);
+      setDraft((current) => current ? { ...current, hasSavedPat: false } : current);
+      notify({ tone: 'success', text: 'The Jira token was revoked and the local credential removed.' });
+    } catch (error) { notify({ tone: 'error', text: error instanceof Error ? error.message : 'The Jira token could not be revoked.' }); }
+    finally { setWorking(''); }
+  };
   const backup = async () => {
     setWorking('backup');
     try { const result = await window.axiloom.backup(); if (!result.canceled) notify({ tone: 'success', text: 'Workspace backup created. Active credentials are excluded.' }); }
@@ -224,14 +268,24 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     <section className="panel settings-panel">
       <SectionHeading title="Source connection" hint="Automatic sync is read-only. Issue mutations still require an explicit action and live Jira permission checks." />
       <div className="callout info"><LockKeyhole size={16} /><span>Supported here: HTTPS Jira Data Center with a personal access token, and offline Jira JSON imports. Jira Cloud OAuth is not implemented or claimed by this build.</span></div>
+      {providerInfo && <p className="field-hint">{providerInfo.label} · {Object.entries(providerInfo.capabilities).filter(([, available]) => available).map(([capability]) => ({ fileImport: 'file import', projectDiscovery: 'project discovery', fieldDiscovery: 'field discovery', readOnlySync: 'read-only sync', userInitiatedWrites: 'permission-checked writes' }[capability] || capability)).join(' · ')}</p>}
       <label className="form-field full"><span>Source name</span><input value={draft.sourceInstance.displayName} onChange={(event) => updateSourceName(event.target.value)} maxLength={160} placeholder="Jira instance or export name" /><small>Each workspace holds one Jira source. Confirm this name before importing; create a separate workspace for another source.</small></label>
       <label className="form-field full"><span>Jira base URL</span><input value={draft.jiraUrl} onChange={(event) => update('jiraUrl', event.target.value)} placeholder="https://jira.example.org" dir="ltr" autoComplete="url" /><small>Use HTTPS. Credentials, query strings and fragments are rejected.</small></label>
+      {draft.jiraUrl && <>
+        <label className="form-field"><span>Jira network access</span><select value={draft.sourceInstance.networkAccess.mode} onChange={(event) => updateNetworkAccess({ mode: event.target.value as 'private' | 'public-pinned', approvedAddresses: event.target.value === 'private' ? [] : draft.sourceInstance.networkAccess.approvedAddresses })}><option value="private">Private network</option><option value="public-pinned">Approved public endpoint</option></select><small>Private network access is the default. Public access requires pinned administrator-approved IPv4 addresses.</small></label>
+        {draft.sourceInstance.networkAccess.mode === 'public-pinned' && <label className="form-field"><span>Approved public IPv4 addresses</span><textarea value={draft.sourceInstance.networkAccess.approvedAddresses.join('\n')} onChange={(event) => updateNetworkAccess({ approvedAddresses: event.target.value.split(/[\n,]/).map((address) => address.trim()).filter(Boolean) })} dir="ltr" rows={3} /><small>Enter the exact public addresses approved for this Jira host. DNS must resolve only to this list; each request connects to a pinned address with TLS verification and redirects disabled.</small></label>}
+      </>}
       <div className="connection-row"><span className={`connection-dot ${connection?.ok ? 'connected' : connection?.ok === false ? 'failed' : ''}`} /><b>{connection?.ok ? `Connected${connection.displayName ? ` · ${connection.displayName}` : ''}` : connection?.ok === false ? 'Connection failed' : draft.sourceInstance.displayName || 'Not verified'}</b>
         <button className="button secondary" onClick={refreshMetadata} disabled={!draft.jiraUrl || working === 'metadata'}><RefreshCw size={14} /> Discover projects and fields</button>
         <button className="button secondary" onClick={testConnection} disabled={!draft.jiraUrl || working === 'connection'}><Wifi size={14} /> Test connection</button>
-        <button className="button secondary" onClick={sync} disabled={!draft.jiraUrl || !draft.hasSavedPat || working === 'sync'}><Server size={14} /> Sync read-only</button></div>
+        {jiraProgress && !['done', 'error', 'cancelled'].includes(String(jiraProgress.phase))
+          ? <button className="button secondary" onClick={cancelSync} disabled={working === 'cancel-sync'}><Server size={14} /> Cancel sync</button>
+          : <button className="button secondary" onClick={sync} disabled={!draft.jiraUrl || !draft.hasSavedPat || working === 'sync'}><Server size={14} /> Sync read-only</button>}</div>
       {catalog && <p className="field-hint">{catalog.projects?.value.length || 0} projects · {catalog.fields?.value.length || 0} fields · {catalog.issueTypes?.value.length || 0} issue types</p>}
-      <div className="auth-row"><label className="form-field"><span>Personal access token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Token is never included in the profile" autoComplete="new-password" /></label><label className="check-row"><input type="checkbox" checked={saveToken} onChange={(event) => setSaveToken(event.target.checked)} /><span>Encrypt with OS credential storage</span></label><button className="button secondary" onClick={connect} disabled={!token || working === 'connection'}><KeyRound size={15} /> Use token</button></div>
+      <div className="auth-row"><label className="form-field"><span>Personal access token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Token is never included in the profile" autoComplete="new-password" /></label><label className="check-row"><input type="checkbox" checked={saveToken} onChange={(event) => setSaveToken(event.target.checked)} /><span>Encrypt with OS credential storage</span></label><button className="button secondary" onClick={connect} disabled={!token || working === 'connection'}><KeyRound size={15} /> Use token</button>
+        {(draft.hasSavedPat || connection?.ok) && <button className="button secondary" onClick={forgetCredential} disabled={working === 'forget-credential'}><Trash2 size={15} /> Forget credential</button>}
+        <button className="button secondary" onClick={loadPatRecords} disabled={!draft.jiraUrl || !(draft.hasSavedPat || connection?.ok) || working === 'pat-list'}>Manage Jira tokens</button></div>
+      {patRecords && <div className="stack-list">{patRecords.map((pat) => <div className="connection-row" key={pat.id}><span><b>{pat.name || pat.id}</b><small>{pat.expiresAt ? ` · expires ${pat.expiresAt}` : ''}{pat.createdAt ? ` · created ${pat.createdAt}` : ''}</small></span><button className="button secondary" onClick={() => revokePat(pat)} disabled={working === 'pat-revoke'}><Trash2 size={14} /> Revoke</button></div>)}{!patRecords.length && <p className="empty-state">No Jira personal access tokens were returned.</p>}</div>}
       {jiraProgress && <p className="field-hint">Sync: {jiraProgress.phase || 'running'} · {Number(jiraProgress.completed || 0).toLocaleString()} / {Number(jiraProgress.total || 0).toLocaleString()}</p>}
       {workspaceInfo?.workspaces && <p className="field-hint">Source identity: {draft.sourceInstance.id || 'assigned before the first import'} · {draft.sourceInstance.provider}</p>}
     </section>

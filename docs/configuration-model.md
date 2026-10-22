@@ -6,7 +6,7 @@ Axiloom starts with an unconfigured, organization-neutral workspace. It does not
 
 The current profile shape is documented in [`config-profile.schema.json`](../schemas/config-profile.schema.json). Runtime validation in the Electron main process enforces field and cross-field rules before persistence. The persisted record has a schema version and an incrementing configuration revision. Each semantic change creates an immutable revision and a fingerprint used by report-cache keys.
 
-Runtime validation treats missing versions as legacy input and migrates them to the current schema. Malformed, fractional, negative, and newer-than-supported versions are rejected before normalization; a profile import remains a draft until the user reviews it and saves it.
+Runtime validation treats missing versions as legacy input and migrates them to the current schema. Version 1 profiles gain private-network access defaults when normalized to version 2. Malformed, fractional, negative, and newer-than-supported versions are rejected before normalization; a profile import remains a draft until the user reviews it and saves it.
 
 The profile contains:
 
@@ -19,6 +19,10 @@ The profile contains:
 - Module switches. A module is enabled only when its declared prerequisites are mapped and valid.
 
 Each workspace has one active source identity. The provider, stable source ID, and canonical endpoint cannot be changed after source evidence or local Jira links are present; connect another Jira instance in a separate workspace. Before ingestion, changing the source identity clears any saved Jira credential and metadata cached for the previous endpoint. Offline JSON imports require a user-confirmed source label that becomes part of that source identity. An older offline workspace with existing evidence but no source ID is bound only after the user confirms which source its existing data belongs to. Configuration profiles cannot move a workspace's existing evidence to a different source.
+
+Jira connection policy is separate from source identity. The default `private` mode permits HTTPS endpoints whose complete DNS answer set is private, loopback, or link-local. `public-pinned` requires administrator-approved public IPv4 addresses; every request checks that DNS resolves only to that allowlist and connects to a pinned address. TLS certificate verification remains enabled and redirects are rejected. Public IPv6 endpoints are not supported by this mode. Changing the network policy creates a configuration revision without reassigning imported evidence.
+
+The provider registry currently exposes offline JSON import and Jira Server/Data Center bearer-token access. Capability descriptors distinguish project/field discovery, read-only sync, and user-initiated writes. Issue write permissions are checked against Jira before the action. Jira Cloud remains unsupported pending a separately registered and tested OAuth 2.0 integration.
 
 ## Resolution rules
 

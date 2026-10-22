@@ -1,29 +1,26 @@
 const { parentPort, workerData } = require('node:worker_threads');
-const { promises: dns } = require('node:dns');
 const { openDatabase, saveIssue, saveSprint, mergeIssueHistoryPage } = require('./database.cjs');
+const { createProviderAdapter } = require('./jira-providers.cjs');
 
 const { discoverMetadata } = require('./jira-metadata.cjs');
 
 const { dbPath, config, token, resume } = workerData;
 const db = openDatabase(dbPath);
-const base = new URL(config.jiraUrl);
+const provider = createProviderAdapter(config, token);
+const abortController = new AbortController();
+parentPort.on('message', (message) => {
+  if (message?.type === 'cancel') abortController.abort();
+});
 let activeRunId = null;
 
 function sendProgress(value) { parentPort.postMessage({ type: 'progress', value }); }
-function privateAddress(address) {
-  const ip = address.toLowerCase().replace(/^::ffff:/, '');
-  if (ip.includes(':')) return ip === '::1' || /^f[cd]/.test(ip) || /^fe[89ab]/.test(ip);
-  const parts = ip.split('.').map(Number);
-  return parts[0] === 10 || parts[0] === 127 || (parts[0] === 169 && parts[1] === 254)
-    || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
-    || (parts[0] === 192 && parts[1] === 168);
-}
 
-async function validateHost() {
-  if (base.protocol !== 'https:') throw new Error('همگام‌سازی Jira فقط روی HTTPS انجام می‌شود.');
-  if (['localhost', '127.0.0.1', '::1'].includes(base.hostname)) return;
-  const addresses = await dns.lookup(base.hostname, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some(({ address }) => !privateAddress(address))) throw new Error('آدرس Jira باید به IP خصوصی شبکهٔ داخلی resolve شود.');
+function throwIfCancelled() {
+  if (abortController.signal.aborted) {
+    const error = new Error('Synchronization cancelled by user.');
+    error.name = 'AbortError';
+    throw error;
+  }
 }
 
 function readSyncState(key) {
@@ -39,22 +36,9 @@ function writeSyncState(key, value) {
 
 function clearSyncState(key) { db.prepare('DELETE FROM sync_state WHERE key=?').run(key); }
 
-async function getJira(resource, options = {}) {
-  await validateHost();
-  const target = new URL(resource.replace(/^\//, ''), `${base.toString().replace(/\/$/, '')}/`);
-  if (target.origin !== base.origin) throw new Error('درخواست Jira به دامنهٔ دیگری هدایت شد.');
-  const response = await fetch(target, {
-    ...options,
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(options.headers || {}) },
-    redirect: 'manual',
-    signal: AbortSignal.timeout(60000),
-  });
-  if (response.status >= 300 && response.status < 400) throw new Error('Jira درخواست را redirect کرد؛ آدرس پایه را بررسی کنید.');
-  const text = await response.text();
-  let body = {};
-  try { body = text ? JSON.parse(text) : {}; } catch { body = { message: text }; }
-  if (!response.ok) throw new Error(`Jira (${response.status}): ${body.errorMessages?.join('، ') || body.message || response.statusText}`);
-  return body;
+function getJira(resource, options = {}) {
+  throwIfCancelled();
+  return provider.request(resource, { ...options, signal: abortController.signal });
 }
 
 function beginRun() {
@@ -91,11 +75,13 @@ function upsertIssuePage(issues, checkpointKey, checkpointState) {
 async function syncIssueSearch() {
 
   for (const project of config.projects) {
+    throwIfCancelled();
     const checkpointKey = `jira:issues:${project}`;
     const checkpoint = resume ? readSyncState(checkpointKey) : null;
     let startAt = checkpoint?.startAt || 0;
     const projectRun = checkpoint?.runId || activeRunId;
     for (;;) {
+      throwIfCancelled();
       const params = new URLSearchParams({ jql: `project = ${project} ORDER BY key`, startAt: String(startAt), maxResults: '100', fields: '*all', expand: 'changelog,names,schema' });
       const page = await getJira(`rest/api/2/search?${params.toString()}`);
       const items = Array.isArray(page.issues) ? page.issues.map((issue) => ({ ...issue, names: { ...(page.names || {}), ...(issue.names || {}) }, schema: { ...(page.schema || {}), ...(issue.schema || {}) } })) : [];
@@ -114,11 +100,13 @@ async function syncIssueSearch() {
 
 async function syncSprintBoards() {
   for (const route of config.boardRoutes || []) {
+    throwIfCancelled();
     const boardId = String(route.boardId);
     const checkpointKey = `jira:sprints:${boardId}`;
     const checkpoint = resume ? readSyncState(checkpointKey) : null;
     let startAt = Number(checkpoint?.startAt || 0);
     for (;;) {
+      throwIfCancelled();
       const params = new URLSearchParams({ startAt: String(startAt), maxResults: '50' });
       const page = await getJira(`rest/agile/1.0/board/${encodeURIComponent(boardId)}/sprint?${params.toString()}`);
       const values = Array.isArray(page.values) ? page.values : [];
@@ -181,6 +169,7 @@ async function syncIssueHistory() {
   let failure = null;
   const worker = async () => {
     while (!failure) {
+      throwIfCancelled();
       const index = position++;
       if (index >= issues.length) return;
       const issue = issues[index];
@@ -216,11 +205,13 @@ async function syncCollections() {
   let completed = 0;
   let lastRowId = 0;
   for (;;) {
+    throwIfCancelled();
     // Read a bounded amount of raw JSON at a time. Large workspace databases
     // must not materialize every issue row in the worker's memory at once.
     const rows = readBatch.all(lastRowId);
     if (!rows.length) break;
     for (const row of rows) {
+      throwIfCancelled();
       lastRowId = Number(row.scan_id);
       const issue = JSON.parse(row.raw_json);
       if (!config.projects.includes(issue.fields.project?.key || issue.key.split('-')[0])) continue;
@@ -247,7 +238,6 @@ async function syncCollections() {
 }
 
 async function run() {
-  await validateHost();
   const health = await getJira('rest/api/2/myself');
   beginRun();
   sendProgress({ phase: 'started', user: health.displayName || '', projects: config.projects.length, boards: config.boardRoutes.length });
@@ -266,4 +256,8 @@ async function run() {
 }
 
 run().then(() => parentPort.postMessage({ type: 'done', value: { runId: activeRunId } }))
-  .catch((error) => { try { db.close(); } catch { /* already closed */ } parentPort.postMessage({ type: 'error', error: error.message }); });
+  .catch((error) => {
+    try { db.close(); } catch { /* already closed */ }
+    const cancelled = abortController.signal.aborted || error?.name === 'AbortError';
+    parentPort.postMessage({ type: cancelled ? 'cancelled' : 'error', error: cancelled ? 'Synchronization cancelled by user.' : error.message });
+  });

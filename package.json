@@ -12,6 +12,7 @@
     "build": "tsc --noEmit && vite build",
     "test:data-access": "node tools/test-data-access.mjs",
     "test:configuration": "node tools/test-configuration.mjs",
+    "test:providers": "node tools/test-jira-providers.mjs",
     "test:workspaces": "node tools/test-workspaces.mjs",
     "test:migration": "node tools/test-workspace-migration.mjs",
     "migrate:workspace": "node tools/migrate-workspace.mjs",

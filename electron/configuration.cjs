@@ -1,6 +1,8 @@
 const { createHash } = require('node:crypto');
 
-const CONFIG_SCHEMA_VERSION = 1;
+const { validateNetworkAccess } = require('./jira-providers.cjs');
+
+const CONFIG_SCHEMA_VERSION = 2;
 const SEMANTIC_KEYS = new Set([
   'storyPoints', 'sprint', 'epicLink', 'epicName', 'team', 'workClassification',
   'issueTags', 'requester', 'department', 'productOwner', 'loggedTime',
@@ -14,7 +16,7 @@ const DEFAULT_CONFIG = Object.freeze({
   migrationWarnings: [],
   organization: { name: '', locale: 'en-US', timeZone: 'UTC' },
   workspaceName: '',
-  sourceInstance: { id: '', provider: 'offline-json', displayName: '', endpoint: '' },
+  sourceInstance: { id: '', provider: 'offline-json', displayName: '', endpoint: '', networkAccess: { mode: 'private', approvedAddresses: [] } },
   jiraUrl: '',
   projects: [],
   projectRoles: { productIntake: [], technicalDelivery: [], commitments: [] },
@@ -88,7 +90,7 @@ function normalizeConfig(input = {}) {
   if (inputSchemaVersion > CONFIG_SCHEMA_VERSION) {
     throw new Error(`Configuration schema version ${inputSchemaVersion} is newer than the supported version ${CONFIG_SCHEMA_VERSION}.`);
   }
-  const legacy = inputSchemaVersion < CONFIG_SCHEMA_VERSION;
+  const legacy = inputSchemaVersion < 1;
   const sourceTeams = Array.isArray(input.teams) ? input.teams : [];
   const teams = sourceTeams.filter(isRecord).map((team) => ({
     id: asString(team.id, 80),
@@ -119,6 +121,7 @@ function normalizeConfig(input = {}) {
   const organization = { ...defaults.organization, ...(isRecord(input.organization) ? input.organization : {}) };
   const jiraUrl = asString(input.jiraUrl, 2000);
   const sourceInput = { ...defaults.sourceInstance, ...(isRecord(input.sourceInstance) ? input.sourceInstance : {}) };
+  const networkInput = isRecord(sourceInput.networkAccess) ? sourceInput.networkAccess : {};
   const explicitSource = isRecord(input.sourceInstance);
   const projectRoles = { ...defaults.projectRoles, ...(isRecord(input.projectRoles) ? input.projectRoles : {}) };
   const workflowsInput = isRecord(input.workflows) ? input.workflows : {};
@@ -182,6 +185,10 @@ function normalizeConfig(input = {}) {
       provider: asString(jiraUrl ? 'jira-datacenter' : (explicitSource ? sourceInput.provider : 'offline-json'), 40),
       displayName: asString(sourceInput.displayName || organization.name, 160),
       endpoint: asString(jiraUrl || sourceInput.endpoint, 2000),
+      networkAccess: {
+        mode: asString(networkInput.mode || 'private', 24),
+        approvedAddresses: stringList(networkInput.approvedAddresses, 64),
+      },
     },
     projects: stringList(input.projects, 80).map((key) => key.toUpperCase()),
     projectRoles: Object.fromEntries(Object.keys(defaults.projectRoles).map((role) => [role, stringList(projectRoles[role], 80).map((key) => key.toUpperCase())])),
@@ -229,6 +236,11 @@ function validateConfig(input) {
   }
   assert(['offline-json', 'jira-datacenter'].includes(config.sourceInstance.provider), `Unsupported source provider: ${config.sourceInstance.provider}`);
   if (config.jiraUrl) assert(config.sourceInstance.provider === 'jira-datacenter', 'A Jira URL requires the Jira Data Center source adapter.');
+  validateNetworkAccess(config.sourceInstance.networkAccess);
+  if (config.sourceInstance.provider === 'offline-json') {
+    assert(config.sourceInstance.networkAccess.mode === 'private' && config.sourceInstance.networkAccess.approvedAddresses.length === 0,
+      'Offline JSON sources cannot configure live Jira network access.');
+  }
   assert(config.sourceInstance.id.length <= 80, 'Source instance ID is too long.');
   if (config.sourceInstance.endpoint) {
     let endpoint;

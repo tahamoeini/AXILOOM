@@ -715,6 +715,9 @@ button:focus-visible, summary:focus-visible, a:focus-visible, [tabindex]:focus-v
 .workflow-fieldset { grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); }
 .weekday-list { display: flex; flex-wrap: wrap; gap: 10px 17px; padding: 9px 0 13px; }
 .connection-row,.auth-row,.settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.stack-list { display: grid; gap: 8px; margin-top: 10px; }
+.stack-list .connection-row { justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line, #d9e1e8); border-radius: 9px; margin: 0; }
+.stack-list .connection-row > span { display: grid; gap: 2px; }
 .connection-dot { width: 9px; height: 9px; border-radius: 50%; background: #9aa8ad; }
 .connection-dot.connected { background: #2e9d68; box-shadow: 0 0 0 3px #dff4e9; }
 .connection-dot.failed { background: #d54e51; box-shadow: 0 0 0 3px #fae3e3; }

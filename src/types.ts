@@ -163,7 +163,13 @@ export interface AppConfig {
   migrationWarnings: string[];
   organization: { name: string; locale: string; timeZone: string };
   workspaceName: string;
-  sourceInstance: { id: string; provider: 'offline-json' | 'jira-datacenter'; displayName: string; endpoint: string };
+  sourceInstance: {
+    id: string;
+    provider: 'offline-json' | 'jira-datacenter';
+    displayName: string;
+    endpoint: string;
+    networkAccess: { mode: 'private' | 'public-pinned'; approvedAddresses: string[] };
+  };
   jiraUrl: string;
   projects: string[];
   projectRoles: Record<string, string[]>;
@@ -266,11 +272,14 @@ export interface AxiloomApi {
   exportXlsx: (report: ExportReport) => Promise<{ canceled?: boolean; filePath?: string }>;
   exportPdf: (report: ExportReport) => Promise<{ canceled?: boolean; filePath?: string }>;
   usePat: (token: string, save: boolean) => Promise<{ connected: boolean; saved: boolean }>;
+  forgetPat: () => Promise<{ connected: boolean; saved: boolean }>;
   createPat: (username: string, password: string, name: string, expiryDays: number, save: boolean) => Promise<{ created: boolean; token: string | null; metadata: Record<string, string>; saved: { connected: boolean; saved: boolean } }>;
-  listPats: () => Promise<Array<Record<string, any>>>;
+  listPats: () => Promise<Array<{ id: string; name: string; createdAt: string; expiresAt: string }>>;
   revokePat: (tokenId: string) => Promise<{ revoked: boolean }>;
   testJira: () => Promise<{ ok: boolean; displayName: string; account: string }>;
   startSync: (resume: boolean) => Promise<{ started: boolean }>;
+  cancelSync: () => Promise<{ requested: boolean }>;
+  getSourceProviderCapabilities: () => Promise<{ id: string; label: string; authentication: string; capabilities: Record<string, boolean> }>;
   onImportProgress: (callback: (progress: Record<string, any>) => void) => () => void;
   onJiraProgress: (callback: (progress: Record<string, any>) => void) => () => void;
 }
