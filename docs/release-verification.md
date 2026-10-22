@@ -1,7 +1,7 @@
 # Release verification record
 
 **Updated:** 2026-10-22
-**Release status:** Not releasable. The renderer builds, but no desktop artifact has been produced. WP08 implementation commit is `05f44d6d96e3dfca8ac8f6842d19d98ec219d6cb`, followed by WP09 implementation commit `cb31cbe82d3be3ee4f7bb99d05f5b26dca65c860` and evidence commit `8484c40cf4a4c643fdf0009e56b06dd0c14fc0ba`, all on the public default branch `codex/axiloom-transformation`. Local WP09 boundary and capacity-reason corrections remain under final verification. GitHub API verification on 2026-10-22 confirmed both WP09 commits are present. No open PR or PR-triggered workflow run is associated with WP09. There is no separate review-branch, PR review, or PR CI evidence.
+**Release status:** Not releasable. The renderer builds, but no desktop artifact has been produced. WP08 implementation commit is `05f44d6d96e3dfca8ac8f6842d19d98ec219d6cb`, followed by WP09 implementation commit `cb31cbe82d3be3ee4f7bb99d05f5b26dca65c860` and evidence commit `8484c40cf4a4c643fdf0009e56b06dd0c14fc0ba` on the public default branch `codex/axiloom-transformation`. The WP09 follow-up `fbb95c277d88db1957479e6867a0a551d0f6c2e1` passed local validation but has not been pushed. GitHub API verification on 2026-10-22 confirmed both baseline WP09 commits are present. No open PR or PR-triggered workflow run is associated with WP09. There is no separate review-branch, PR review, or PR CI evidence.
 
 ## Local checks
 
@@ -21,7 +21,7 @@
 
 `npm run build:portable` completed the renderer build, then stopped because the verified official Electron `45.0.0` Windows x64 runtime archive is not present in the local cache. The script exits before replacing release output. No portable package, archive, checksum, or fresh-install result was produced. macOS packaging was not run in this Windows environment.
 
-GitHub API verification on 2026-10-22 confirmed `tahamoeini/AXILOOM` is public and `codex/axiloom-transformation` is the default branch. WP09 commits `cb31cbe82d3be3ee4f7bb99d05f5b26dca65c860` and `8484c40cf4a4c643fdf0009e56b06dd0c14fc0ba` are present. No open PR or PR-triggered workflow run was returned for WP09. Local `git ls-remote` previously failed with `getaddrinfo() thread failed to start`. An earlier attempt to create a separate public review branch was rejected by automatic review; no new review branch has been created. The Product360 source remains untouched.
+GitHub API verification on 2026-10-22 confirmed `tahamoeini/AXILOOM` is public and `codex/axiloom-transformation` is the default branch. WP09 commits `cb31cbe82d3be3ee4f7bb99d05f5b26dca65c860` and `8484c40cf4a4c643fdf0009e56b06dd0c14fc0ba` are present. The validated follow-up `fbb95c277d88db1957479e6867a0a551d0f6c2e1` remains local until the final delivery stage. No open PR or PR-triggered workflow run was returned for WP09. Local `git ls-remote` previously failed with `getaddrinfo() thread failed to start`. An earlier attempt to create a separate public review branch was rejected by automatic review; no new review branch has been created. The Product360 source remains untouched.
 
 No `LICENSE` file is present in the destination. The intended code license and release attribution remain undecided; do not represent the source as permissively licensed.
 
