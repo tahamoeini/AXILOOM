@@ -27,7 +27,7 @@ Semantic field coverage follows the project/type binding selected for each issue
 
 Team precedence is shared by delivery and sprint-commitment reports: issue override, configured team field, board route, component assignment, project default. Team and rule active dates are inclusive UTC dates. Delivery evaluates the selected source at the sprint end; a commitment evaluates it when the issue enters the configured commitment state, or at sprint start when already committed. Report rows carry stable team IDs and hierarchy paths beside display names.
 
-Unknown, inactive, ambiguous, and conflicting mappings generate distinct quality findings. An issue-sprint relationship without an active team stays in universal issue and relationship counts. Team-only totals exclude it and display the number and detail of excluded relationships. Portfolio Epic team subtotals count distinct child issue keys with attributed sprint history; because team attribution can change over time, one child may occur in multiple team subtotals. Epic-wide child counts remain unique.
+Unknown, inactive, ambiguous, and conflicting mappings generate distinct quality findings. An issue-sprint relationship without an active team remains visible in the explicit unmapped relationship count and detail list; team-only totals exclude it. Portfolio Epic team subtotals count distinct child issue keys using reportable sprint history, falling back to current issue attribution when no reportable history exists; because team attribution can change over time, one child may occur in multiple team subtotals. Epic-wide child counts remain unique.
 
 ## Capacity and calendar
 
