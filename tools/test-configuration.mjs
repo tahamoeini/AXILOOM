@@ -54,6 +54,8 @@ assert.throws(() => validateConfig({ projects: ['BAD KEY'] }), /Invalid project 
 assert.throws(() => validateConfig({ jiraUrl: 'http://jira.example.test' }), /HTTPS/);
 assert.throws(() => validateConfig({ projects: ['OPS'], fieldMappings: [{ semanticKey: 'storyPoints', providerFieldId: '$.fields.inject' }] }), /Invalid provider field ID/);
 assert.throws(() => validateConfig({ teams: [{ id: 'team-a', name: 'A' }], boardRoutes: [{ boardId: '42', teamId: 'missing' }] }), /unknown team/);
+assert.throws(() => validateConfig({ teams: [{ id: 'team-a', name: 'North', aliases: ['Shared'] }, { id: 'team-b', name: 'South', aliases: ['shared'] }] }), /Team label .* is ambiguous/);
+assert.doesNotThrow(() => validateConfig({ teams: [{ id: 'team-a', name: 'North', aliases: ['north'] }, { id: 'team-b', name: 'South' }] }), 'case-insensitive duplicate aliases within one team are harmless');
 assert.throws(() => validateConfig({ calendar: { timeZone: 'Unknown/Zone' } }), /Unknown time zone/);
 assert.throws(() => validateConfig({ calendar: { configured: true, workingDays: [] } }), /at least one working day/);
 

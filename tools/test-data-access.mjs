@@ -215,6 +215,51 @@ async function main() {
   assert.equal(getCalendarPeriodReport(alternateDb, { projects: ['IDEAS'], from: '2026-02-01', to: '2026-02-28' }).completed, 1,
     'a second profile applies its own intake workflow');
   alternateDb.close();
+
+  const teamConflictConfig = {
+    ...alternateConfig,
+    teams: [
+      { id: 'team-north', name: 'North', aliases: [] },
+      { id: 'team-south', name: 'South', aliases: [] },
+    ],
+    boardRoutes: [{ boardId: '21', teamId: 'team-north', team: 'North' }],
+    fieldMappings: [
+      ...alternateConfig.fieldMappings.filter((mapping) => mapping.semanticKey !== 'sprint'),
+      { semanticKey: 'sprint', providerFieldId: 'customfield_sprints', projectKey: 'ENGINEERING', transform: 'id-list' },
+    ],
+  };
+  const conflictIssue = alternateProfileIssue(33, 'ENGINEERING-2', 'ENGINEERING', 'Finished', 3, '', 'South', 'Feature', '2026-02-02T00:00:00.000Z');
+  conflictIssue.fields.customfield_sprints = ['77'];
+  const unmappedIssue = alternateProfileIssue(34, 'ENGINEERING-3', 'ENGINEERING', 'Finished', 5, '', 'Unknown Group', 'Feature', '2026-02-02T00:00:00.000Z');
+  unmappedIssue.fields.customfield_sprints = ['77'];
+  const routedSprint = {
+    id: '77', originBoardId: '21', name: 'Delivery Sprint', state: 'closed',
+    startDate: '2026-02-01T00:00:00.000Z', activatedDate: '2026-02-01T00:00:00.000Z',
+    endDate: '2026-02-14T00:00:00.000Z', completeDate: '2026-02-14T00:00:00.000Z',
+  };
+  const conflictMetrics = calculateMetrics([conflictIssue, unmappedIssue], [routedSprint], teamConflictConfig);
+  assert.ok(conflictMetrics.quality.findings.some((finding) => finding.code === 'TEAM_ATTRIBUTION_CONFLICT'),
+    'a team field that disagrees with its board route is reported as a data-quality conflict');
+  assert.ok(conflictMetrics.quality.findings.some((finding) => finding.code === 'TEAM_FIELD_UNMAPPED'),
+    'an unknown team field value is reported while the board route remains available');
+  assert.equal(conflictMetrics.relations.find((row) => row.issue.key === 'ENGINEERING-2').team, 'South',
+    'conflict diagnostics do not silently change the existing configured-field attribution');
+  assert.equal(conflictMetrics.relations.find((row) => row.issue.key === 'ENGINEERING-3').team, 'North',
+    'an unknown field value falls back to the configured board route');
+
+  const ambiguousConfig = {
+    ...teamConflictConfig,
+    teams: [
+      { id: 'team-north', name: 'North', aliases: ['Shared'] },
+      { id: 'team-south', name: 'South', aliases: ['shared'] },
+    ],
+  };
+  const ambiguousIssue = alternateProfileIssue(35, 'ENGINEERING-4', 'ENGINEERING', 'Finished', 2, '', 'Shared', 'Feature', '2026-02-02T00:00:00.000Z');
+  ambiguousIssue.fields.customfield_sprints = ['77'];
+  const ambiguousMetrics = calculateMetrics([ambiguousIssue], [routedSprint], ambiguousConfig);
+  assert.ok(ambiguousMetrics.quality.findings.some((finding) => finding.code === 'TEAM_FIELD_AMBIGUOUS'),
+    'ambiguous legacy team aliases are reported defensively');
+  assert.equal(ambiguousMetrics.relations[0].team, 'North', 'ambiguous legacy values fall back to the configured board route');
 }
 
 main().then(() => {

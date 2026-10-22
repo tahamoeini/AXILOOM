@@ -22,8 +22,9 @@
 ## Current mission change inventory
 
 - `tools/migrate-workspace.mjs`, `tools/test-workspace-migration.mjs`, `electron/database.cjs`, and `package.json`: add a closed-workspace copy migration, staging-only schema changes, evidence/count reconciliation, source-file immutability checks, and a genuine minimal schema-version-1 fixture.
+- `electron/configuration.cjs`, `electron/metrics.cjs`, `tools/test-configuration.mjs`, and `tools/test-data-access.mjs`: reject cross-team label collisions and report issue-field/board-route disagreements or unknown/ambiguous team values without changing established attribution. The added sprint fixture also exposed and fixes handling of workflow completion status sets.
 - `tools/renderer-harness.html`: add a browser-only synthetic renderer fixture using an in-memory bridge.
-- `README.md`, `docs/generalization-coverage.csv`, `docs/implementation-progress.md`, `docs/recovery-review.md`, `docs/workspace-migration.md`, and `docs/release-verification.md`: record usage, coverage, verification evidence, and remaining release gates.
+- `README.md`, `docs/configuration-model.md`, `docs/generalization-coverage.csv`, `docs/implementation-progress.md`, `docs/recovery-review.md`, `docs/workspace-migration.md`, and `docs/release-verification.md`: record usage, coverage, verification evidence, and remaining release gates.
 
 ## Work-package status
 
@@ -35,7 +36,7 @@
 | WP03 Dynamic configuration | Partial | Versioned profile normalization, validation, settings, and config revision history exist. Complete setup wizard, policy completeness, and alternative-profile acceptance remain. |
 | WP04 Provider adapters | Partial | Offline JSON and a Jira Server/Data Center bearer-token path exist. No live tenant test; Jira Cloud OAuth is unimplemented and explicitly unclaimed. |
 | WP05 Semantic mappings | Partial | Field mappings are configurable and consumed by semantic projections. Need broader two-profile history, null/invalid-value, and issue-type-context coverage. |
-| WP06 Teams and attribution | Partial | Dynamic project roles, teams, board routes, and team field mappings exist. Conflict resolution and broader source identity tests remain. |
+| WP06 Teams and attribution | Partial | Dynamic project roles, teams, board routes, and team field mappings exist. Colliding team labels are rejected; issue-field versus board-route conflicts are warned without changing attribution. Unknown team values and all report/export paths still need broader acceptance. |
 | WP07 Workflow semantics | Partial | Completion and milestone settings are configurable. Commitment and lifecycle behavior is not accepted across alternate workflows. |
 | WP08 Metrics stability | Partial | Existing delivery calculations use configured mappings in major paths; generic report fixtures pass. No baseline parity matrix, independent report/export reconciliation, or real source comparison. |
 | WP09 Calendar and capacity | Partial | Locale/time zone, weekdays, holidays, and capacity overrides are configurable. DST, effective-dated allocations, and cross-time-zone acceptance remain. |
@@ -53,7 +54,7 @@
 | Check | Result |
 |---|---|
 | `npm run test:configuration` | Passed. |
-| `npm run test:data-access` | Passed against synthetic configured Jira data. |
+| `npm run test:data-access` | Passed against synthetic configured Jira data, including cross-profile mappings, team conflict/unknown/ambiguous attribution, and sprint workflow status handling. |
 | `npm run test:workspaces` | Passed with local filesystem access; validates synthetic database isolation only. |
 | `npm run test:migration` | Passed with local filesystem access; synthetic source/destination schema reconciliation, dry-run cleanup, byte-preservation, and no-overwrite checks. |
 | `npm run build` | Passed with local filesystem access; TypeScript check and Vite bundle completed. Sandboxed Vite access failed with `EPERM`. |

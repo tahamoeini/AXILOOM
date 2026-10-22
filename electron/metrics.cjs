@@ -144,7 +144,8 @@ function parseSprintMemberships(issue) {
 
 function isDone(status, doneStatuses) {
   const current = String(status || '').trim().toLocaleLowerCase('en-US');
-  return doneStatuses.some((value) => String(value).trim().toLocaleLowerCase('en-US') === current);
+  const statuses = doneStatuses instanceof Set ? doneStatuses : new Set(Array.isArray(doneStatuses) ? doneStatuses : []);
+  return [...statuses].some((value) => String(value).trim().toLocaleLowerCase('en-US') === current);
 }
 
 function exactTagAt(issue, atMs, expected) {
@@ -279,6 +280,9 @@ function makeRelation(issue, sprint, interval, config) {
   const teamValue = valueAt(issue, 'team', issue.semantic.team, sprint.window.endMs, (value) => value && typeof value === 'object' ? value.value || value.name || '' : String(value || ''));
   const teamCandidates = config.teams.filter((team) => [team.name, ...(team.aliases || [])].some((label) => String(label).trim().toLocaleLowerCase('en-US') === String(teamValue || '').trim().toLocaleLowerCase('en-US')));
   const assignedTeam = teamCandidates.length === 1 ? teamCandidates[0].name : sprint.teamRoute;
+  const teamFieldConflict = teamCandidates.length === 1 && Boolean(sprint.teamRoute) && teamCandidates[0].name !== sprint.teamRoute;
+  const teamFieldAmbiguous = Boolean(String(teamValue || '').trim()) && teamCandidates.length > 1;
+  const teamFieldUnmapped = Boolean(String(teamValue || '').trim()) && teamCandidates.length === 0;
   const classificationValue = valueAt(issue, 'workClassification', issue.semantic.workClassification, sprint.window.endMs, (value) => value && typeof value === 'object' ? value.value || value.name || '' : String(value || ''));
   const configuredClassification = (config.workClassifications || []).find((classification) => [classification.label, ...(classification.aliases || [])].some((label) => String(label).trim().toLocaleLowerCase('en-US') === String(classificationValue || '').trim().toLocaleLowerCase('en-US')));
   const workClassification = configuredClassification?.id || 'unclassified';
@@ -303,6 +307,9 @@ function makeRelation(issue, sprint, interval, config) {
     membershipIntervals: interval,
     team: assignedTeam,
     teamAttributionSource: teamCandidates.length === 1 ? 'configured team field' : 'board mapping',
+    teamFieldConflict,
+    teamFieldAmbiguous,
+    teamFieldUnmapped,
     assignee: latestAssignee,
     atStart,
     atEnd,
@@ -689,6 +696,14 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
       if (!sprint?.reportEligible || !sprint.window) return;
       const relation = makeRelation(issue, sprint, interval, config);
       if (!relation) return;
+      if (relation.teamFieldConflict) {
+        quality.findings.push({ severity: 'warning', code: 'TEAM_ATTRIBUTION_CONFLICT', count: 1, message: `${issue.key} is attributed to ${relation.team} by its configured team field, but ${sprint.name} is routed to ${sprint.teamRoute}; the configured field remains the reported attribution.` });
+      }
+      if (relation.teamFieldAmbiguous) {
+        quality.findings.push({ severity: 'warning', code: 'TEAM_FIELD_AMBIGUOUS', count: 1, message: `${issue.key} has a team value matching multiple configured teams; board routing is used for ${sprint.name}.` });
+      } else if (relation.teamFieldUnmapped) {
+        quality.findings.push({ severity: 'warning', code: 'TEAM_FIELD_UNMAPPED', count: 1, message: `${issue.key} has an unrecognized team value; board routing is used for ${sprint.name}.` });
+      }
       if (!relation.team) {
         quality.findings.push({ severity: 'warning', code: 'UNMAPPED_TEAM', count: 1, message: `${issue.key} in ${sprint.name} has no team attribution and is excluded from team-level totals.` });
         return;

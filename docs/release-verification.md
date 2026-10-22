@@ -8,7 +8,7 @@
 | Check | Result | Boundary |
 |---|---|---|
 | `npm run test:configuration` | Passed | Configuration validation and revision behavior on synthetic profiles. |
-| `npm run test:data-access` | Passed | Synthetic Jira import, semantic mapping, and data-access/report regression checks. |
+| `npm run test:data-access` | Passed | Synthetic Jira import, semantic mapping, team conflict/unknown/ambiguous attribution, sprint workflow status handling, and data-access/report regression checks. |
 | `npm run test:workspaces` | Passed | Isolation across synthetic local workspace databases; not multi-source isolation within one workspace. |
 | `npm run test:migration` | Passed | Synthetic schema-version-1 migration, dry-run cleanup, evidence reconciliation, source immutability, and no-overwrite checks. |
 | `npm run build` | Passed with local filesystem access | TypeScript and Vite production renderer build completed. Sandboxed Vite access fails at `realpath` with `EPERM`. |

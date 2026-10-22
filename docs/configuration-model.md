@@ -20,7 +20,7 @@ The profile contains:
 
 More specific field bindings take precedence: issue type plus project, then project, then workspace-wide. Overlapping bindings at equal scope are rejected as ambiguous. A missing binding is reported as unmapped; the resolver does not guess from a field label or convert an unknown value to zero.
 
-Team assignment follows configured board and field mappings plus explicit user overrides. If evidence produces multiple teams or no team, universal totals retain the work and team-specific views show the exclusion or conflict.
+Team assignment follows configured board and field mappings plus explicit user overrides. Team names and aliases are case-insensitively unique across teams; ambiguous labels are rejected at profile validation. When an issue's configured team differs from its sprint board route, the configured team remains the report attribution and a data-quality warning records the disagreement. Unknown or ambiguous issue-team values fall back to the board route with a warning. If neither source resolves a team, the issue remains in universal totals and is excluded from team-specific totals.
 
 Workflow policies are scoped by logical role. Status-category completion can be used when the provider supplies it; named status mappings are versioned. Request, commitment, and delivery completion do not inherit one another's policy.
 

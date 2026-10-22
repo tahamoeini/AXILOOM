@@ -235,6 +235,16 @@ function validateConfig(input) {
     assert(!teamIds.has(team.id), `Duplicate team ID: ${team.id}`);
     teamIds.add(team.id);
   });
+  const teamLabels = new Map();
+  config.teams.forEach((team) => {
+    for (const label of [team.name, ...team.aliases]) {
+      const normalized = label.trim().toLocaleLowerCase('en-US');
+      if (!normalized) continue;
+      const existingTeamId = teamLabels.get(normalized);
+      assert(!existingTeamId || existingTeamId === team.id, `Team label "${label}" is ambiguous between configured teams.`);
+      teamLabels.set(normalized, team.id);
+    }
+  });
   const capacityOverrideKeys = new Set();
   config.capacityOverrides.forEach((item) => {
     assert(item.team && item.sprintId && item.assigneeKey, 'Capacity overrides need a team, sprint ID, and assignee key.');
