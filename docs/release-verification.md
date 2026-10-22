@@ -1,7 +1,7 @@
 # Release verification record
 
 **Updated:** 2026-10-22
-**Release status:** Not releasable. The renderer builds, but no desktop artifact has been produced. The public branch head is `855875b1b4f0c9189be627c0dc624a1e3af27942`; renderer-harness/UI-contract follow-ups are currently uncommitted. No PR or CI review exists.
+**Release status:** Not releasable. The renderer builds, but no desktop artifact has been produced. Local head `8ee80196a299b83108764731142513d875b6a78a` includes the WP04 renderer-harness/UI-contract follow-ups and is one commit ahead of public head `855875b1b4f0c9189be627c0dc624a1e3af27942`. No PR or CI review exists.
 
 ## Local checks
 
@@ -19,7 +19,7 @@
 
 `npm run build:portable` completed the renderer build, then stopped because the verified official Electron `45.0.0` Windows x64 runtime archive is not present in the local cache. The script exits before replacing release output. No portable package, archive, checksum, or fresh-install result was produced. macOS packaging was not run in this Windows environment.
 
-GitHub API verification on 2026-10-22 confirms `tahamoeini/AXILOOM` is public, `codex/axiloom-transformation` is the default branch, and its latest public commit is `855875b1b4f0c9189be627c0dc624a1e3af27942`. No PR exists. Local `git ls-remote` previously failed with `getaddrinfo() thread failed to start`. An earlier attempt to create a separate public review branch was rejected by automatic review; no new public review branch has been created. The current local follow-ups have not been published. The Product360 source remains untouched.
+GitHub API verification on 2026-10-22 confirms `tahamoeini/AXILOOM` is public, `codex/axiloom-transformation` is the default branch, and its latest public commit is `855875b1b4f0c9189be627c0dc624a1e3af27942`. No PR exists. Local `git ls-remote` previously failed with `getaddrinfo() thread failed to start`. An earlier attempt to create a separate public review branch was rejected by automatic review; no new public review branch has been created. Local follow-up commit `8ee80196a299b83108764731142513d875b6a78a` has not been published. The Product360 source remains untouched.
 
 No `LICENSE` file is present in the destination. The intended code license and release attribution remain undecided; do not represent the source as permissively licensed.
 
