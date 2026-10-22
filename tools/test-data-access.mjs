@@ -545,6 +545,11 @@ async function main() {
   assert.equal(effectiveOverrideMetrics.sprintMetrics[0].scope.capacityHours, 22,
     'a stable-team allocation override applies by effective date and fractional working days');
   assert.equal(effectiveOverrideMetrics.personMetrics[0].scope.capacityHours, 22);
+  assert.match(effectiveOverrideMetrics.personMetrics[0].scope.capacityEstimateReason, /explicitly configured/);
+  const inferredCapacityMetrics = calculateMetrics([fullyMappedFeature], [planSprint], { ...effectiveOverrideConfig, capacityOverrides: [] });
+  assert.match(inferredCapacityMetrics.personMetrics[0].scope.capacityEstimateReason, /defaults to 100%/,
+    'person reports explain that issue-assignee-derived allocation is only an estimate');
+  assert.match(inferredCapacityMetrics.sprintMetrics[0].scope.capacityEstimateReason, /roster is not verified/);
   const expiredOverrideConfig = {
     ...effectiveOverrideConfig,
     capacityOverrides: [{ ...effectiveOverrideConfig.capacityOverrides[0], activeFrom: '2026-03-01', activeTo: '2026-06-30' }],
@@ -621,6 +626,14 @@ async function main() {
   ));
   assert.equal(ambiguousCalendar.plannedWorkingDays, null, 'local timestamp strings without an offset do not silently use the host timezone');
   assert.match(ambiguousCalendar.scope.capacityEstimateReason, /unambiguous instant/);
+  const spaceNaiveCalendar = calendarMetricsFor(calendarConfig('Europe/Berlin', [1, 2, 3, 4, 5]), calendarSprint(
+    'space-naive-date', '2026-03-30 09:00:00', '2026-03-31 09:00:00', '2026-03-30T00:00:00.000Z', '2026-03-30T23:00:00.000Z',
+  ));
+  assert.equal(spaceNaiveCalendar.plannedWorkingDays, null, 'space-separated timezone-naive timestamps are unavailable too');
+  const impossibleCalendar = calendarMetricsFor(calendarConfig('Europe/Berlin', [1, 2, 3, 4, 5]), calendarSprint(
+    'impossible-date', '2026-02-30', '2026-03-02', '2026-03-01T00:00:00.000Z', '2026-03-02T23:00:00.000Z',
+  ));
+  assert.equal(impossibleCalendar.plannedWorkingDays, null, 'invalid calendar dates do not roll into a different month');
   assert.equal(berlinCalendar.scope.capacityHours, null, 'team capacity remains unavailable without assigned people or overrides');
   assert.match(berlinCalendar.scope.capacityEstimateReason, /No team-member allocation/);
   assert.equal(businessReport.unmapped.count, 0);

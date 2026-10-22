@@ -81,7 +81,7 @@ try {
   const result = await migrateWorkspace({ sourcePath, destinationPath });
   assert.equal(result.sourceSchemaVersion, 1);
   assert.equal(result.destinationSchemaVersion, 8);
-  assert.equal(result.destinationConfigSchemaVersion, 2);
+  assert.equal(result.destinationConfigSchemaVersion, 3);
   assert.equal(result.preservedEvidenceRowsVerified.product_records, 1);
   assert.equal(result.preservedEvidenceRowsVerified.record_events, 1);
   assert.equal(result.preservedEvidenceRowsVerified.jira_issue_tombstones, 1);

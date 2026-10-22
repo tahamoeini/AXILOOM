@@ -1092,6 +1092,7 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
       teamId: current?.teamId || teamId,
       teamPath: current?.teamPath || configuredTeamPath(config, teamId),
       manualOverride: true,
+      manualWorkingDayOverride: hasWorkingDayOverride,
     });
   });
   personCapacity.forEach((person) => {
@@ -1180,10 +1181,11 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     const person = personCapacity.get(`${first.team}|${first.sprint.id}|${getAssigneeKey(first.assignee)}`);
     const capacity = person?.capacityHours ?? null;
     const capacityHoursReason = !config.calendar?.configured ? 'Calendar is not configured.'
-      : !Number.isFinite(first.sprint.plannedCapacityHours) && !person?.manualOverride ? first.sprint.calendarEstimateReason
+      : !Number.isFinite(first.sprint.plannedCapacityHours) && !person?.manualWorkingDayOverride ? first.sprint.calendarEstimateReason
         : capacity === null ? 'No person allocation is available for this sprint.'
-          : !person?.manualOverride ? 'Person allocation defaults to 100%; no explicit override is configured.'
-            : first.sprint.calendarEstimateReason;
+          : [person?.manualWorkingDayOverride ? '' : first.sprint.calendarEstimateReason,
+            person?.manualOverride ? 'Person allocation is explicitly configured.' : 'Person allocation defaults to 100%; no explicit override is configured.']
+            .filter(Boolean).join(' ');
     const scope = scoreBundle(rows, { capacityHours: capacity, capacityHoursReason }, config);
     ['allocationStatus', 'capacityTargets'].forEach((key) => { delete scope[key]; });
     personMetrics.push({

@@ -89,7 +89,7 @@
           scopeIssues: 2, scopeSP: 8, plannedIssues: 2, adhocIssues: 0, plannedSP: 8, adhocSP: 0,
           committedSP: 8, completedIssues: 1, completedSP: 5, completedPlannedSP: 5, completedAdhocSP: 0,
           scopeAddedSP: 0, scopeRemovedSP: 0, outgoingCarryoverIssues: 1, carryoverRateSP: 0.375,
-          loggedHours: 4, capacityHours: 40, utilization: 0.1, medianCycleTimeDays: 4,
+          loggedHours: 4, capacityHours: 40, utilization: 0.1, capacityEstimateReason: 'Some assignee allocations default to 100%; the roster is not verified.', medianCycleTimeDays: 4,
           reopenedIssueRate: 0, forecastPlannableSP: 5, forecastConfidence: 'low', forecastHistorySprints: 1,
           forecastMethod: 'synthetic fixture', storyPointCoverage: 0.5, completedStoryPointCoverage: 1,
           timeDataCoverage: 0.5, estimateAccuracyCoverage: 0.5, estimateAccuracy: 0.75,
@@ -100,7 +100,7 @@
           assignee: 'Synthetic Owner', sprintId: 'synthetic-sprint-1', sprintName: 'Synthetic Sprint', sprintOrder: 1,
           startDate: '2026-02-01', endDate: '2026-02-14', assignedIssues: 1, assignedSP: 5, completedIssues: 1,
           completedSP: 5, plannedIssues: 1, adhocIssues: 0, outgoingCarryoverIssues: 0, loggedHours: 4,
-          capacityHours: 20, utilization: 0.2, medianCycleTimeDays: 4, estimateAccuracy: 0.75,
+          capacityHours: 20, utilization: 0.2, capacityEstimateReason: 'Person allocation defaults to 100%; no explicit override is configured.', medianCycleTimeDays: 4, estimateAccuracy: 0.75,
           storyPointCoverage: 1, timeDataCoverage: 1, estimateAccuracyCoverage: 1,
         }];
         const smoke = { config, snapshot, syntheticIssue, issueExports: [], issueListRequests: [], importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };

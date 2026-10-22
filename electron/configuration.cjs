@@ -177,7 +177,8 @@ function normalizeConfig(input = {}) {
   const calendar = { ...defaults.calendar, ...(isRecord(input.calendar) ? input.calendar : {}) };
   calendar.workingDays = Array.isArray(calendar.workingDays) ? calendar.workingDays.map(Number) : [];
   calendar.holidays = stringList(calendar.holidays, 10);
-  calendar.workIntervals = (Array.isArray(calendar.workIntervals) ? calendar.workIntervals : []).filter(isRecord).map((interval) => ({
+  if (Array.isArray(calendar.workIntervals)) assert(calendar.workIntervals.every(isRecord), 'Calendar work intervals must be objects.');
+  calendar.workIntervals = (Array.isArray(calendar.workIntervals) ? calendar.workIntervals : []).map((interval) => ({
     start: asString(interval.start, 5), end: asString(interval.end, 5),
     ...(Array.isArray(interval.weekdays) ? { weekdays: interval.weekdays.map(Number) } : {}),
   }));
@@ -202,7 +203,8 @@ function normalizeConfig(input = {}) {
     classification: asString(item.classification, 80),
   }));
   const capacityOverrides = [];
-  (Array.isArray(input.capacityOverrides) ? input.capacityOverrides : []).filter(isRecord).forEach((item) => {
+  if (Array.isArray(input.capacityOverrides)) assert(input.capacityOverrides.every(isRecord), 'Capacity overrides must be objects.');
+  (Array.isArray(input.capacityOverrides) ? input.capacityOverrides : []).forEach((item) => {
     const legacyTeamName = asString(item.team, 160);
     let teamId = asString(item.teamId, 80);
     if (!teamId && legacyTeamName) {

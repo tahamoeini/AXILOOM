@@ -58,6 +58,13 @@ assert.deepEqual(migratedCapacityProfile.capacityOverrides[0], {
   teamId: 'team-legacy', sprintId: '301', assigneeKey: 'person-1', assignee: 'Person One',
   activeFrom: '', activeTo: '', overrideWorkingDays: null, allocation: 0.5,
 }, 'version 2 team-name capacity overrides migrate to stable team IDs');
+const migratedV1CapacityProfile = validateConfig({
+  schemaVersion: 1,
+  capacityOverrides: [{ team: 'Archived Operations', sprintId: '302', assigneeKey: 'person-2', assignee: 'Person Two', overrideWorkingDays: 4, allocation: 0.75 }],
+});
+assert.equal(migratedV1CapacityProfile.capacityOverrides[0].teamId, migratedV1CapacityProfile.teams[0].id,
+  'version 1 capacity override labels receive a stable team ID when no team record exists');
+assert.equal(migratedV1CapacityProfile.teams[0].name, 'Archived Operations');
 const effectiveCapacityProfile = validateConfig({
   teams: [{ id: 'team-calendar', name: 'Calendar Team', aliases: [] }],
   calendar: { configured: true, timeZone: 'Europe/Berlin', workingDays: [1, 2, 3, 4, 5], hoursPerDay: 8, holidays: [], workIntervals: [{ start: '09:00', end: '12:00' }, { start: '13:00', end: '17:00' }] },
@@ -68,6 +75,8 @@ assert.throws(() => validateConfig({
   teams: [{ id: 'team-calendar', name: 'Calendar Team', aliases: [] }],
   calendar: { configured: true, timeZone: 'UTC', workingDays: [1, 2, 3, 4, 5], hoursPerDay: 8, holidays: [], workIntervals: [{ start: '09:00', end: '12:00' }, { start: '11:00', end: '17:00' }] },
 }), /must not overlap on the same weekday/);
+assert.throws(() => validateConfig({ calendar: { workIntervals: [null] } }), /must be objects/);
+assert.throws(() => validateConfig({ capacityOverrides: [null] }), /must be objects/);
 assert.notEqual(configurationFingerprint(profile), configurationFingerprint({ ...profile, organization: { ...profile.organization, name: 'Another Studio' } }));
 assert.notEqual(configurationFingerprint(profile), configurationFingerprint({ ...profile, sourceInstance: { ...profile.sourceInstance, networkAccess: { mode: 'public-pinned', approvedAddresses: ['8.8.8.8'] } } }));
 assert.equal(sourceIdentityKey(profile), sourceIdentityKey({ ...profile, organization: { ...profile.organization, name: 'Another Studio' } }));
