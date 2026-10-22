@@ -97,6 +97,7 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
   const [status, setStatus] = useState('');
   const [offset, setOffset] = useState(0);
   const [recordList, setRecordList] = useState<ProductRecordListResult>({ items: [], total: 0, offset: 0, limit: 50, hasMore: false, statusOptions: [], dueCount: 0, legacyObjectiveCounts: {}, meetingCounts: {} });
+  const [recordLinks, setRecordLinks] = useState<Array<Record<string, any>>>([]);
   const [recordLoading, setRecordLoading] = useState(true);
   const [objectiveOptions, setObjectiveOptions] = useState<Array<{ id: string; title: string }>>([]);
   const [importing, setImporting] = useState(false);
@@ -117,8 +118,8 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
   }, [pendingRecord, targetKind, strategyTemplates, page, clearPending]);
 
   const records = recordList.items;
-  const linkMap = new Map(snapshot.links.map((link) => [link.recordId, link]));
-  const relatedRecords = snapshot.links.filter((link) => link.kind === 'request' || link.kind === 'action');
+  const linkMap = new Map(recordLinks.map((link) => [link.recordId, link]));
+  const relatedRecords = recordLinks.filter((link) => link.kind === 'request' || link.kind === 'action');
   const statuses = recordList.statusOptions;
 
   useEffect(() => {
@@ -130,6 +131,15 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
       .finally(() => { if (active) setRecordLoading(false); });
     return () => { active = false; };
   }, [targetKind, query, status, offset, snapshot]);
+
+  useEffect(() => {
+    let active = true;
+    const ids = recordList.items.map((record) => record.id);
+    window.axiloom.getRecordLinkSummaries(ids)
+      .then((links) => { if (active) setRecordLinks(links); })
+      .catch(() => { if (active) setRecordLinks([]); });
+    return () => { active = false; };
+  }, [recordList.items]);
 
   useEffect(() => {
     let active = true;
@@ -220,6 +230,7 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
 
   async function exportProductReport(summaryOnly = false) {
     const exportRecords: ProductRecord[] = [];
+    const exportLinks: Array<Record<string, any>> = [];
     let exportTotal = 0;
     try {
       let nextOffset = 0;
@@ -230,6 +241,9 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
         nextOffset += result.items.length;
         if (!result.items.length) break;
       } while (nextOffset < exportTotal);
+      for (let index = 0; index < exportRecords.length; index += 250) {
+        exportLinks.push(...await window.axiloom.getRecordLinkSummaries(exportRecords.slice(index, index + 250).map((record) => record.id)));
+      }
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Product records could not be prepared for export.');
       return;
@@ -248,8 +262,9 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
       ],
     };
     const deliveryRows: Array<Array<string | number | boolean>> = [['ثبت محصولی', 'نوع ثبت', 'Issue', 'پروژه', 'وضعیت Jira', 'مسئول فعلی', 'Epic Link', 'تیم', 'Sprint', 'State', 'کار مرتبط', 'کار تکمیل', 'SP تکمیل', 'ساعت changelog']];
+    const exportLinkMap = new Map(exportLinks.map((link) => [link.recordId, link]));
     exportRecords.forEach((record) => {
-      const linked = linkMap.get(record.id);
+      const linked = exportLinkMap.get(record.id);
       if (!linked?.linkedIssues.length) {
         deliveryRows.push([record.title, record.kind, '—', '—', '—', '—', '—', '—', 'بدون Sprint تاریخی', 0, 0, 0, 0, 0]);
         return;

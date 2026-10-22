@@ -80,7 +80,7 @@ try {
 
   const result = await migrateWorkspace({ sourcePath, destinationPath });
   assert.equal(result.sourceSchemaVersion, 1);
-  assert.equal(result.destinationSchemaVersion, 9);
+  assert.equal(result.destinationSchemaVersion, 10);
   assert.equal(result.destinationConfigSchemaVersion, 4);
   assert.equal(result.preservedEvidenceRowsVerified.product_records, 1);
   assert.equal(result.preservedEvidenceRowsVerified.record_events, 1);

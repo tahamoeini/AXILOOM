@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('axiloom', {
   getSnapshot: (filters) => ipcRenderer.invoke('app:snapshot', filters || {}),
   listIssues: (filters) => ipcRenderer.invoke('issues:list', filters || {}),
   listRecords: (filters) => ipcRenderer.invoke('records:list', filters || {}),
+  getRecordLinkSummaries: (ids) => ipcRenderer.invoke('records:link-summaries', ids || []),
   getIssueFilterOptions: (project) => ipcRenderer.invoke('issues:filter-options', project || ''),
   getIssueOverviewStats: () => ipcRenderer.invoke('issues:overview-stats'),
   getCalendarPeriodReport: (filters) => ipcRenderer.invoke('issues:period-report', filters || {}),

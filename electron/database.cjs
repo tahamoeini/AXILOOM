@@ -445,7 +445,7 @@ function getBusinessBoardReport(db, filters = {}) {
   const emptyAggregates = { total: 0, openCount: 0, doneCount: 0, linkedCount: 0, withoutOwner: 0,
     withStatusAge: 0, withoutStatusAgeOpen: 0, statusSinceCount: 0, epicCount: 0, withoutComponent: 0,
     uniqueDeliveryKeyCount: 0, statuses: [], components: [], assignees: [], componentAssignees: [], aging: [], monthly: [],
-    departments: [], productOwners: [], organizationMonthly: [], matchingRecordIds: [] };
+    departments: [], productOwners: [], organizationMonthly: [], matchingRecordCount: 0 };
   if (!projects.length || !config.modules.productIntake) return { items: [], total: 0, offset, limit: pageSize, hasMore: false, aggregates: emptyAggregates };
   const dataGeneration = getDataGeneration(db);
   const snapshotDate = new Date().toISOString().slice(0, 10);
@@ -548,7 +548,7 @@ function getBusinessBoardReport(db, filters = {}) {
     aging, monthly: Array.from(monthly.values()).sort((a, b) => a.month.localeCompare(b.month)).slice(-18),
     departments: mapGroups(departments), productOwners: mapGroups(productOwners),
     organizationMonthly: Array.from(organizationMonthly.values()).sort((a, b) => a.month.localeCompare(b.month) || a.level.localeCompare(b.level) || a.key.localeCompare(b.key)).slice(-240),
-    matchingRecordIds: Array.from(matchingRecordIds),
+    matchingRecordCount: matchingRecordIds.size,
   };
   return { items: page, total, offset, limit: pageSize, hasMore: offset + page.length < total, aggregates: aggregate };
 }
@@ -1567,8 +1567,10 @@ function readRows(db, table, order = '') {
 }
 
 function listRecords(db, filters = {}) {
-  const limit = Math.max(1, Math.min(250, Math.trunc(Number(filters.limit) || 50)));
-  const offset = Math.max(0, Math.trunc(Number(filters.offset) || 0));
+  const requestedLimit = Number(filters.limit);
+  const requestedOffset = Number(filters.offset);
+  const limit = Math.max(1, Math.min(250, Number.isFinite(requestedLimit) && requestedLimit ? Math.trunc(requestedLimit) : 50));
+  const offset = Math.max(0, Math.min(2147483647, Number.isFinite(requestedOffset) ? Math.trunc(requestedOffset) : 0));
   const where = ['archived_at IS NULL'];
   const params = [];
   const kinds = [...new Set((Array.isArray(filters.kinds) ? filters.kinds : filters.kind ? [filters.kind] : [])
@@ -1581,6 +1583,7 @@ function listRecords(db, filters = {}) {
   const status = String(filters.status || '').trim().slice(0, 160);
   if (status) { where.push("COALESCE(json_extract(payload_json,'$.status'),'')=?"); params.push(status); }
   const relatedIssueKey = String(filters.relatedIssueKey || '').trim().toUpperCase();
+  if (relatedIssueKey && !/^[A-Z][A-Z0-9_]*-\d+$/.test(relatedIssueKey)) where.push('0=1');
   if (relatedIssueKey && /^[A-Z][A-Z0-9_]*-\d+$/.test(relatedIssueKey)) {
     const scalarFields = ['primaryIssueKey','issueKey','requestKey','productKey','businessEpicKey','businessIssueKey'];
     const arrayFields = ['issueKeys','businessIssueKeys','technicalIssueKeys','linkedIssueKeys','relatedIssueKeys'];

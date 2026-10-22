@@ -8,7 +8,7 @@ const emptyReport: BusinessBoardReport = {
   items: [], total: 0, offset: 0, limit: 50, hasMore: false,
   aggregates: { total: 0, openCount: 0, doneCount: 0, linkedCount: 0, withoutOwner: 0, withStatusAge: 0,
     withoutStatusAgeOpen: 0, statusSinceCount: 0, epicCount: 0, withoutComponent: 0, uniqueDeliveryKeyCount: 0,
-    statuses: [], components: [], assignees: [], componentAssignees: [], aging: [], monthly: [], departments: [], productOwners: [], organizationMonthly: [], matchingRecordIds: [] },
+    statuses: [], components: [], assignees: [], componentAssignees: [], aging: [], monthly: [], departments: [], productOwners: [], organizationMonthly: [], matchingRecordCount: 0 },
 };
 
 function recordIssueKeys(record: ProductRecord) {
@@ -144,7 +144,7 @@ export default function BusinessBoard({ snapshot, config, openIssue, createRecor
     await window.axiloom.exportXlsx(reportData);
   }
 
-  const matchingRecordCount = report.aggregates.matchingRecordIds.length;
+  const matchingRecordCount = report.aggregates.matchingRecordCount;
   const openRequests = snapshot.business.summary.open || 0;
   const doneRequests = snapshot.business.summary.done || 0;
 

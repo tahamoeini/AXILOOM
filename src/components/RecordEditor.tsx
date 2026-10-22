@@ -80,11 +80,12 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
   const [savingRelationship, setSavingRelationship] = useState(false);
   const [recordLookupQuery, setRecordLookupQuery] = useState('');
   const [recordLookupRecords, setRecordLookupRecords] = useState<ProductRecord[]>([]);
+  const [selectedRecordOptions, setSelectedRecordOptions] = useState<ProductRecord[]>([]);
   const availableRecordOptions = useMemo(() => {
     const byId = new Map<string, ProductRecord>();
-    [...recordOptions, ...recordLookupRecords, ...(record ? [record] : [])].forEach((item) => byId.set(item.id, item));
+    [...recordOptions, ...recordLookupRecords, ...selectedRecordOptions, ...(record ? [record] : [])].forEach((item) => byId.set(item.id, item));
     return Array.from(byId.values());
-  }, [recordOptions, recordLookupRecords, record]);
+  }, [recordOptions, recordLookupRecords, selectedRecordOptions, record]);
   const activeRelationships = useMemo(() => record ? relationships.filter((item) => relatedToRecord(item, record.id)) : [], [relationships, record]);
   const suggestions = useMemo(() => {
     if (!record) return [];
@@ -116,6 +117,19 @@ export default function RecordEditor({ kind, template, record, jiraUrl, close, s
     }, recordLookupQuery ? 200 : 0);
     return () => { active = false; clearTimeout(timer); };
   }, [recordLookupQuery]);
+
+  const selectedReferenceIds = Array.from(new Set([
+    ...fields.filter((field) => field.type === 'recordRef').map((field) => String(values[field.key] || '')),
+    ...(targetType === 'record' ? [targetId] : []),
+  ].filter(Boolean)));
+  useEffect(() => {
+    let active = true;
+    if (!selectedReferenceIds.length) { setSelectedRecordOptions([]); return () => { active = false; }; }
+    window.axiloom.listRecords({ ids: selectedReferenceIds, limit: Math.min(250, selectedReferenceIds.length), includeHistory: false })
+      .then((result) => { if (active) setSelectedRecordOptions(result.items); })
+      .catch(() => { if (active) setSelectedRecordOptions([]); });
+    return () => { active = false; };
+  }, [selectedReferenceIds.join('|')]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !saving && !savingRelationship) close(); };

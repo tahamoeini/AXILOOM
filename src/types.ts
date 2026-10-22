@@ -133,7 +133,7 @@ export interface BusinessBoardReport {
     departments: Array<{ key: string; total: number; open: number; done: number; assignees: number }>;
     productOwners: Array<{ key: string; total: number; open: number; done: number; assignees: number }>;
     organizationMonthly: Array<{ level: 'productOwner' | 'department'; key: string; month: string; created: number; completed: number }>;
-    matchingRecordIds: string[];
+    matchingRecordCount: number;
   };
 }
 
@@ -284,6 +284,7 @@ export interface AxiloomApi {
   getSnapshot: (filters?: Record<string, unknown>) => Promise<Snapshot>;
   listIssues: (filters?: IssueListFilters) => Promise<IssueListResult>;
   listRecords: (filters?: { kind?: string; kinds?: string[]; query?: string; status?: string; ids?: string[]; relatedIssueKey?: string; offset?: number; limit?: number; includeHistory?: boolean }) => Promise<ProductRecordListResult>;
+  getRecordLinkSummaries: (ids: string[]) => Promise<Array<Record<string, any>>>;
   getIssueFilterOptions: (project?: string) => Promise<IssueFilterOptions>;
   getIssueOverviewStats: () => Promise<{ issueCount:number; openCount:number; epicLinkedCount:number; issuesWithoutAssignee:number; lastIssueUpdate:string|null; projectCounts:Array<{project:string;count:number}> }>;
   getCalendarPeriodReport: (filters: { projects?:string[]; from?:string; to?:string; previousFrom?:string; previousTo?:string }) => Promise<{ created:number; completed:number; completedWithoutResolution:number; previousCreated:number|null; previousCompleted:number|null; monthly:Array<{month:string;created:number;completed:number}> }>;

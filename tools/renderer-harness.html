@@ -164,6 +164,7 @@
               dueCount: snapshot.records.filter((record) => record.kind === 'action' && record.payload.dueAt && !['Done', 'Closed', 'Resolved', 'Rejected'].includes(String(record.payload.status))).length,
               legacyObjectiveCounts, meetingCounts };
           },
+          getRecordLinkSummaries: async (ids) => snapshot.links.filter((link) => (ids || []).includes(link.recordId)),
           getConfig: async () => config,
           getWorkspaceInfo: async () => ({
             id: 'default', name: config.workspaceName, path: 'synthetic-fixture', warning: '',

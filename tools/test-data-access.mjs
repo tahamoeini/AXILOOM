@@ -73,6 +73,20 @@ function runSnapshotWorker() {
   });
 }
 
+function runDataAccessWorker(method, args = []) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(root, 'electron/data-access-worker.cjs'), { workerData: { dbPath, method, args } });
+    let result, messageError;
+    worker.once('message', (message) => { if (message.ok) result = message.value; else messageError = new Error(message.error || 'Data access worker failed.'); });
+    worker.once('error', reject);
+    worker.once('exit', (code) => {
+      if (code !== 0) reject(new Error('Data access worker exited with code ' + code + '.'));
+      else if (messageError) reject(messageError);
+      else resolve(result);
+    });
+  });
+}
+
 async function main() {
   let db = openDatabase(dbPath);
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, 10, 'new workspace schema must be version 10');
@@ -119,6 +133,12 @@ async function main() {
   assert.equal(objectivePage.hasMore, false);
   assert.ok(listRecords(db, { query: 'request-1', limit: 10 }).items.some((item) => item.id === 'request-1'), 'SQL record search includes stable identifiers');
   assert.deepEqual(listRecords(db, { relatedIssueKey: 'REQUEST-1', limit: 10 }).items.map((item) => item.id).sort(), ['objective-1', 'record-1', 'request-1']);
+  const firstRelatedPage = listRecords(db, { relatedIssueKey: 'REQUEST-1', limit: 2, offset: 0, includeHistory: false });
+  const secondRelatedPage = listRecords(db, { relatedIssueKey: 'REQUEST-1', limit: 2, offset: 2, includeHistory: false });
+  assert.equal(firstRelatedPage.hasMore, true); assert.equal(secondRelatedPage.hasMore, false);
+  assert.equal(firstRelatedPage.total, 3); assert.equal(secondRelatedPage.total, 3);
+  assert.equal(new Set([...firstRelatedPage.items, ...secondRelatedPage.items].map((item) => item.id)).size, 3, 'SQL record pages are complete and disjoint');
+  assert.equal(listRecords(db, { relatedIssueKey: 'not-a-jira-key', limit: 10 }).total, 0, 'invalid issue-key filters cannot broaden into an unfiltered result');
   assert.equal(objectivePage.legacyObjectiveCounts['objective-1'], 1, 'legacy objective references remain countable without loading all records');
   for (let index = 0; index < 12; index += 1) db.prepare('INSERT INTO record_events(record_id,event_type,occurred_at,payload_json) VALUES(?,?,?,?)')
     .run('objective-1', 'updated', new Date(Date.parse(now) + index).toISOString(), '{}');
@@ -204,6 +224,9 @@ async function main() {
   assert.deepEqual(firstSnapshot.business.issues, [], 'intake rows use the paged report API');
   assert.deepEqual(firstSnapshot.records, [], 'product records must be fetched through the paged records API');
   assert.equal(firstSnapshot.summary.recordCount, 3, 'workspace snapshot retains an active product-record count');
+  assert.ok(firstSnapshot.links.length <= 5, 'general snapshot carries only a small recent product-link preview');
+  const pagedProductLinks = await runDataAccessWorker('getRecordLinkSummaries', [['request-1']]);
+  assert.equal(pagedProductLinks.length, 1); assert.equal(pagedProductLinks[0].recordId, 'request-1', 'page link summaries can be fetched by record ID through a read-only worker');
   assert.equal(firstSnapshot.relationships.length, 2, 'explicit record and Jira relationships are available to the renderer');
   assert.equal(firstSnapshot.relationships.find((relationship) => relationship.id === objectiveRequest.id).history.length, 3, 'created, archived, and restored provenance events remain visible');
   assert.equal(firstSnapshot.quality.evidence.recordRelationshipEvents, 4, 'relationship events remain part of the evidence inventory');

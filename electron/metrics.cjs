@@ -1420,7 +1420,7 @@ function publicSnapshot(metrics, productRecords, importRuns, conflicts, filters 
     incomingCarryoverIssues: metric.scope.incomingCarryoverIssues, outgoingCarryoverIssues: metric.scope.outgoingCarryoverIssues,
     storyPointCoverage: metric.scope.storyPointCoverage, timeDataCoverage: metric.scope.timeDataCoverage,
   }));
-  const links = records.filter((record) => ['action', 'request'].includes(record.kind)).map((record) => {
+  const allProductLinks = records.filter((record) => ['action', 'request'].includes(record.kind)).map((record) => {
     const keys = recordIssueKeys(record);
     const linked = Array.from(new Set(keys)).map((key) => issueByKey.get(key)).filter(Boolean);
     const linkedRelations = Array.from(new Set(keys)).flatMap((key) => relationsByIssue.get(key) || []);
@@ -1459,6 +1459,10 @@ function publicSnapshot(metrics, productRecords, importRuns, conflicts, filters 
       linkedDoneCount: completedKeys.size,
     };
   });
+  const selectedRecordIds = Array.isArray(filters.recordIds) ? new Set(filters.recordIds.map(String)) : null;
+  const links = selectedRecordIds
+    ? allProductLinks.filter((link) => selectedRecordIds.has(link.recordId))
+    : allProductLinks.slice(0, 5);
   const jiraIssueLinks = [];
   const seenJiraLinks = new Set();
   metrics.issues.forEach((issue) => (issue.issueLinks || []).forEach((link) => {
