@@ -1,0 +1,104 @@
+name: Portable macOS release
+
+on:
+  repository_dispatch:
+    types: [axiloom-macos-release]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing Axiloom release tag, such as v1.2.3. Blank uses the latest published release.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: axiloom-macos-release-${{ github.event.client_payload.release_tag || github.event.inputs.release_tag || 'latest' }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package macOS ${{ matrix.arch }}
+    runs-on: macos-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.release_tag || github.event.inputs.release_tag || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Resolve existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ github.event.client_payload.release_tag || github.event.inputs.release_tag || '' }}
+        run: |
+          tag="$REQUESTED_TAG"
+          if [ -z "$tag" ]; then
+            tag="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName')"
+          fi
+          if [ -z "$tag" ]; then echo "No published Axiloom release was found." >&2; exit 1; fi
+          version="${tag#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then echo "Invalid release tag: $tag" >&2; exit 1; fi
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' | grep -qx false
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "AXILOOM_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Check out tagged release source
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          git checkout --detach "$RELEASE_TAG"
+
+      - name: Download and verify official Electron runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          ELECTRON_VERSION="$(node -p "require('./package.json').axiloom.portableElectronVersion")"
+          ARCHIVE="electron-v${ELECTRON_VERSION}-darwin-${TARGET_ARCH}.zip"
+          URL="https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/${ARCHIVE}"
+          curl --fail --location --retry 3 "$URL" --output "$RUNNER_TEMP/$ARCHIVE"
+          META="$(gh api "repos/electron/electron/releases/tags/v${ELECTRON_VERSION}" --jq ".assets[] | select(.name == \"${ARCHIVE}\") | [.size, .digest] | @tsv")"
+          EXPECTED_SIZE="$(printf '%s' "$META" | cut -f1)"
+          EXPECTED_DIGEST="$(printf '%s' "$META" | cut -f2 | sed 's/^sha256://')"
+          if [ -z "$EXPECTED_SIZE" ] || ! printf '%s' "$EXPECTED_DIGEST" | grep -Eq '^[0-9a-fA-F]{64}$'; then echo "Official SHA-256 metadata missing for $ARCHIVE" >&2; exit 1; fi
+          ACTUAL_SIZE="$(stat -f%z "$RUNNER_TEMP/$ARCHIVE")"
+          ACTUAL_DIGEST="$(shasum -a 256 "$RUNNER_TEMP/$ARCHIVE" | awk '{print $1}')"
+          ACTUAL_DIGEST_LOWER="$(printf '%s' "$ACTUAL_DIGEST" | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_DIGEST_LOWER="$(printf '%s' "$EXPECTED_DIGEST" | tr '[:upper:]' '[:lower:]')"
+          if [ "$ACTUAL_SIZE" != "$EXPECTED_SIZE" ] || [ "$ACTUAL_DIGEST_LOWER" != "$EXPECTED_DIGEST_LOWER" ]; then echo "Electron runtime verification failed for $ARCHIVE" >&2; exit 1; fi
+          echo "AXILOOM_ELECTRON_VERSION=$ELECTRON_VERSION" >> "$GITHUB_ENV"
+          echo "AXILOOM_ELECTRON_ARCHIVE=$RUNNER_TEMP/$ARCHIVE" >> "$GITHUB_ENV"
+          echo "AXILOOM_ELECTRON_ARCH=$TARGET_ARCH" >> "$GITHUB_ENV"
+          echo "Verified official Electron $ELECTRON_VERSION $TARGET_ARCH runtime."
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Package Axiloom app and ZIP
+        run: npm run build:mac
+
+      - name: Verify app bundle and upload asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          ASSET="release/Axiloom-Portable-${RELEASE_TAG}-macos-${TARGET_ARCH}.zip"
+          if [ ! -s "$ASSET" ]; then echo "Archive is missing: $ASSET" >&2; exit 1; fi
+          gh release upload "$RELEASE_TAG" "$ASSET" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq ".assets[] | select(.name == \"$(basename "$ASSET")\") | .name"

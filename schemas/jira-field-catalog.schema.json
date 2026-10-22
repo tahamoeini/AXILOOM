@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:axiloom:jira-field-catalog:1",
+  "title": "Discovered Jira field catalog",
+  "description": "Runtime metadata returned by the connected Jira source. It contains field definitions only; options, required fields, and permissions must come from the applicable project and issue type context.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "sourceId": { "type": "string", "minLength": 1 },
+    "discoveredAt": { "type": "string", "format": "date-time" },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" },
+          "schema": { "type": "object", "additionalProperties": true },
+          "custom": { "type": "boolean" },
+          "searchable": { "type": "boolean" },
+          "orderable": { "type": "boolean" }
+        },
+        "required": ["id", "name"],
+        "additionalProperties": true
+      }
+    }
+  },
+  "required": ["schemaVersion", "sourceId", "fields"],
+  "additionalProperties": true
+}

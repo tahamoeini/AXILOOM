@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axiloom.dev/schemas/config-profile.v1.json",
+  "title": "Axiloom configuration profile",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaVersion", "organization", "sourceInstance", "projects", "projectRoles", "teams", "boardRoutes", "fieldMappings", "workflows", "calendar", "modules"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "configurationRevision": { "type": "integer", "minimum": 0 },
+    "organization": {
+      "type": "object",
+      "required": ["name", "locale", "timeZone"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 200 },
+        "locale": { "type": "string", "maxLength": 40 },
+        "timeZone": { "type": "string", "maxLength": 80 }
+      },
+      "additionalProperties": false
+    },
+    "workspaceName": { "type": "string", "maxLength": 200 },
+    "sourceInstance": {
+      "type": "object",
+      "required": ["id", "provider", "displayName", "endpoint"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 80 },
+        "provider": { "enum": ["offline-json", "jira-datacenter"] },
+        "displayName": { "type": "string", "maxLength": 160 },
+        "endpoint": { "type": "string", "maxLength": 2000 }
+      },
+      "additionalProperties": false
+    },
+    "jiraUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+    "projects": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 80 } },
+    "projectRoles": { "type": "object", "additionalProperties": { "type": "array", "uniqueItems": true, "items": { "type": "string" } } },
+    "teams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "aliases"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "aliases": { "type": "array", "items": { "type": "string", "maxLength": 160 } },
+          "activeFrom": { "type": "string" },
+          "activeTo": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "boardRoutes": { "type": "array", "items": { "type": "object", "required": ["boardId", "teamId"], "properties": { "boardId": { "type": "string", "pattern": "^\\d+$" }, "teamId": { "type": "string" }, "team": { "type": "string" } }, "additionalProperties": false } },
+    "fieldMappings": { "type": "array", "items": { "type": "object", "required": ["semanticKey", "providerFieldId"], "properties": { "semanticKey": { "type": "string" }, "providerFieldId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$" }, "providerFieldName": { "type": "string", "maxLength": 200 }, "projectKey": { "type": "string" }, "issueTypeId": { "type": "string" }, "transform": { "enum": ["identity", "number", "text", "option-label", "id-list", "boolean"] } }, "additionalProperties": false } },
+    "workflows": { "type": "object", "additionalProperties": { "type": "object" } },
+    "calendar": { "type": "object", "required": ["configured", "timeZone", "workingDays", "hoursPerDay", "holidays"], "properties": { "configured": { "type": "boolean" }, "timeZone": { "type": "string" }, "workingDays": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 6 } }, "hoursPerDay": { "type": "number", "exclusiveMinimum": 0, "maximum": 24 }, "holidays": { "type": "array", "items": { "type": "string", "format": "date" } }, "workIntervals": { "type": "array" } }, "additionalProperties": false },
+    "modules": { "type": "object", "additionalProperties": { "type": "boolean" } }
+  }
+}

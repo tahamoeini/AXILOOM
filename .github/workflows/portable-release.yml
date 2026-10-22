@@ -1,0 +1,205 @@
+name: Portable Windows release
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/portable-release.yml'
+      - '.github/workflows/macos-release.yml'
+      - 'electron/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/**'
+      - 'tools/build-portable.mjs'
+      - 'tools/build-macos.mjs'
+      - 'vite.config.ts'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional SemVer override; leave blank to choose the next version automatically.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: axiloom-portable-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build and publish Windows x64 portable app
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version || '' }}
+        run: |
+          $requested = [string]$env:REQUESTED_VERSION
+          $requested = $requested.Trim()
+          if ($requested.StartsWith('v')) { $requested = $requested.Substring(1) }
+
+          if ($requested) {
+            $version = $requested
+          } else {
+            $baseVersion = (node -p "require('./package.json').version").Trim()
+            $latestTag = git tag --list 'v*' --sort=-version:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
+            if ($latestTag) {
+              $parts = $latestTag.Substring(1).Split('.')
+              $version = "{0}.{1}.{2}" -f [int]$parts[0], [int]$parts[1], ([int]$parts[2] + 1)
+            } else {
+              $version = $baseVersion
+            }
+          }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Release version '$version' must be valid SemVer, such as 1.2.3 or 1.2.3-rc.1."
+          }
+
+          $tag = "v$version"
+          "release_version=$version" >> $env:GITHUB_OUTPUT
+          "release_tag=$tag" >> $env:GITHUB_OUTPUT
+          "AXILOOM_RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          Write-Host "Building Axiloom $tag"
+
+      - name: Download and verify official Electron runtime
+        shell: pwsh
+        run: |
+          $electronVersion = (node -p "require('./package.json').axiloom.portableElectronVersion").Trim()
+          if ($electronVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid Electron version: $electronVersion" }
+
+          $archiveName = "electron-v$electronVersion-win32-x64.zip"
+          $downloadDirectory = Join-Path $env:RUNNER_TEMP 'axiloom-electron'
+          New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
+          $archivePath = Join-Path $downloadDirectory $archiveName
+          $releaseUrl = "https://github.com/electron/electron/releases/download/v$electronVersion"
+          Invoke-WebRequest -Uri "$releaseUrl/$archiveName" -OutFile $archivePath
+
+          $releaseHeaders = @{
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/electron/electron/releases/tags/v$electronVersion" -Headers $releaseHeaders
+          $assetMetadata = $release.assets | Where-Object { $_.name -eq $archiveName } | Select-Object -First 1
+          if (-not $assetMetadata) { throw "Official Electron release metadata does not list $archiveName." }
+          $hashMatch = [regex]::Match([string]$assetMetadata.digest, '^sha256:([0-9a-fA-F]{64})$')
+          if (-not $hashMatch.Success) { throw "Official SHA-256 metadata is unavailable for $archiveName." }
+          $expectedHash = $hashMatch.Groups[1].Value.ToLowerInvariant()
+          $actualHash = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Electron archive checksum mismatch for $archiveName." }
+          if ((Get-Item $archivePath).Length -ne [long]$assetMetadata.size) { throw "Electron archive size mismatch for $archiveName." }
+
+          "AXILOOM_ELECTRON_VERSION=$electronVersion" >> $env:GITHUB_ENV
+          "AXILOOM_ELECTRON_ARCHIVE=$archivePath" >> $env:GITHUB_ENV
+          Write-Host "Verified Electron $electronVersion Windows x64 runtime (SHA-256 $actualHash)."
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Test SQLite projections, caches, and migrations
+        run: npm run test:data-access
+
+      - name: Build portable app
+        run: npm run build:portable
+
+      - name: Verify portable archive contents
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archivePath = Join-Path $env:GITHUB_WORKSPACE 'release\Axiloom-Portable.zip'
+          if (-not (Test-Path $archivePath)) { throw 'Portable ZIP was not created.' }
+
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
+          try {
+            $entries = @($zip.Entries | ForEach-Object { $_.FullName })
+            $required = @('Axiloom.exe', 'resources/app/main.cjs', 'resources/app/build/index.html')
+            $missing = @($required | Where-Object { $_ -notin $entries })
+            if ($missing.Count) { throw "Portable ZIP is missing: $($missing -join ', ')" }
+            if ($entries -contains 'workspace/workspace.sqlite') { throw 'Portable ZIP must not contain a builder workspace database.' }
+          } finally {
+            $zip.Dispose()
+          }
+
+          Write-Host "Portable ZIP verified: $((Get-Item $archivePath).Length) bytes."
+
+      - name: Create GitHub release and upload ZIP
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          $apiBase = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $tag = $env:RELEASE_TAG
+          $releaseUrl = "$apiBase/releases/tags/$tag"
+          $release = $null
+
+          try {
+            $release = Invoke-RestMethod -Method Get -Uri $releaseUrl -Headers $headers
+          } catch {
+            $statusCode = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+            if ($statusCode -ne 404) { throw }
+          }
+
+          if ($release -and -not $release.draft) {
+            throw "Release $tag is already published. Choose a new version."
+          }
+          if (-not $release) {
+            $body = @{
+              tag_name = $tag
+              target_commitish = $env:GITHUB_SHA
+              name = "Axiloom $tag"
+              body = "Windows x64 portable build. macOS arm64 and x64 ZIPs are attached automatically after their builds pass. Each app stores its workspace locally. Runtime: Electron $env:AXILOOM_ELECTRON_VERSION."
+              draft = $true
+              prerelease = $false
+            } | ConvertTo-Json -Compress
+            $release = Invoke-RestMethod -Method Post -Uri "$apiBase/releases" -Headers $headers -ContentType 'application/json' -Body $body
+          }
+
+          $assetName = "Axiloom-Portable-$tag-windows-x64.zip"
+          $assets = Invoke-RestMethod -Method Get -Uri $release.assets_url -Headers $headers
+          foreach ($asset in $assets) {
+            if ($asset.name -eq $assetName) {
+              Invoke-RestMethod -Method Delete -Uri "$apiBase/releases/assets/$($asset.id)" -Headers $headers | Out-Null
+            }
+          }
+
+          $archivePath = Join-Path $env:GITHUB_WORKSPACE 'release\Axiloom-Portable.zip'
+          $uploadHeaders = $headers.Clone()
+          $uploadHeaders['Content-Type'] = 'application/zip'
+          $uploadUrl = "https://uploads.github.com/repos/$env:GITHUB_REPOSITORY/releases/$($release.id)/assets?name=$([uri]::EscapeDataString($assetName))"
+          $asset = Invoke-RestMethod -Method Post -Uri $uploadUrl -Headers $uploadHeaders -InFile $archivePath
+          if ([long]$asset.size -ne (Get-Item $archivePath).Length) { throw 'Uploaded release asset size does not match the built ZIP.' }
+
+          $publishedBody = @{ draft = $false } | ConvertTo-Json -Compress
+          $published = Invoke-RestMethod -Method Patch -Uri "$apiBase/releases/$($release.id)" -Headers $headers -ContentType 'application/json' -Body $publishedBody
+          Write-Host "Release: $($published.html_url)"
+          Write-Host "Asset: $($asset.browser_download_url)"
+
+          $dispatchBody = @{
+            event_type = 'axiloom-macos-release'
+            client_payload = @{ release_tag = $tag }
+          } | ConvertTo-Json -Depth 5
+          Invoke-RestMethod -Method Post -Uri "$apiBase/dispatches" -Headers $headers -ContentType 'application/json' -Body $dispatchBody | Out-Null
+          Write-Host "Dispatched macOS arm64 and x64 builds for $tag."

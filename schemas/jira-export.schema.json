@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:axiloom:jira-export:1",
+  "title": "Jira issue and sprint export envelopes",
+  "description": "A permissive description of common Jira REST export shapes. Provider and version differences are retained as raw fields; this is not a Jira write API contract.",
+  "oneOf": [
+    { "$ref": "#/$defs/IssuePage" },
+    { "$ref": "#/$defs/SprintPage" },
+    { "$ref": "#/$defs/Issue" },
+    { "$ref": "#/$defs/Sprint" }
+  ],
+  "$defs": {
+    "Issue": {
+      "type": "object",
+      "properties": {
+        "id": { "type": ["string", "integer"] },
+        "key": { "type": "string" },
+        "self": { "type": "string" },
+        "fields": { "type": "object", "additionalProperties": true },
+        "changelog": { "type": "object", "additionalProperties": true },
+        "names": { "type": "object", "additionalProperties": true },
+        "schema": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["id", "key", "fields"],
+      "additionalProperties": true
+    },
+    "IssuePage": {
+      "type": "object",
+      "properties": {
+        "issues": { "type": "array", "items": { "$ref": "#/$defs/Issue" } },
+        "startAt": { "type": "integer", "minimum": 0 },
+        "maxResults": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 },
+        "names": { "type": "object", "additionalProperties": { "type": "string" } },
+        "schema": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["issues"],
+      "additionalProperties": true
+    },
+    "Sprint": {
+      "type": "object",
+      "properties": {
+        "id": { "type": ["string", "integer"] },
+        "name": { "type": "string" },
+        "state": { "type": "string" },
+        "startDate": { "type": ["string", "null"] },
+        "endDate": { "type": ["string", "null"] },
+        "completeDate": { "type": ["string", "null"] },
+        "activatedDate": { "type": ["string", "null"] },
+        "originBoardId": { "type": ["string", "integer", "null"] }
+      },
+      "required": ["id"],
+      "additionalProperties": true
+    },
+    "SprintPage": {
+      "type": "object",
+      "properties": {
+        "values": { "type": "array", "items": { "$ref": "#/$defs/Sprint" } },
+        "startAt": { "type": "integer", "minimum": 0 },
+        "maxResults": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 },
+        "isLast": { "type": "boolean" }
+      },
+      "required": ["values"],
+      "additionalProperties": true
+    }
+  }
+}

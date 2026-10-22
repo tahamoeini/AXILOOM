@@ -1,0 +1,10 @@
+node_modules/
+build/
+release/
+dist-portable/
+vendor/
+workspace/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.p360

@@ -1,0 +1,35 @@
+{
+  "name": "axiloom",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-first product intelligence and management workspace",
+  "axiloom": {
+    "portableElectronVersion": "45.0.0"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "test:data-access": "node tools/test-data-access.mjs",
+    "test:configuration": "node tools/test-configuration.mjs",
+    "test:workspaces": "node tools/test-workspaces.mjs",
+    "build:portable": "npm run build && node tools/build-portable.mjs",
+    "build:mac": "npm run build && node tools/build-macos.mjs",
+    "launch:portable": "node tools/launch-portable.mjs"
+  },
+  "dependencies": {
+    "@fontsource/vazirmatn": "5.3.0",
+    "chart.js": "^4.5.1",
+    "lucide-react": "0.575.0",
+    "react": "19.2.8",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "5.2.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  }
+}

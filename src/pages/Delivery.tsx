@@ -1,0 +1,123 @@
+import { useMemo, useState } from 'react';
+import { Download, FileDown, Info, LineChart, UsersRound } from 'lucide-react';
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip, Legend } from 'chart.js';
+import { Bar } from 'react-chartjs-2';
+import Analytics from '../components/Analytics';
+import DashboardLayout from '../components/DashboardLayout';
+import type { ExportReport, Snapshot } from '../types';
+import { DataTable, MultiSelect, MetricCard, SectionHeading, StatusBadge, formatDate, formatNumber, formatPercent } from '../components/Primitives';
+
+type Mode = 'sprints' | 'people';
+ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
+
+function exportReport(snapshot: Snapshot, rows: Array<Record<string, any>>, mode: Mode, summaryOnly = false): ExportReport {
+  const metadata = mode === 'sprints'
+    ? ['team', 'sprintId', 'sprintName', 'state', 'sprintOrder', 'startDate', 'endDate', 'calendarDays', 'workingDays']
+    : ['team', 'assigneeKey', 'assignee', 'sprintId', 'sprintName', 'sprintOrder', 'startDate', 'endDate', 'calendarDays', 'workingDays'];
+  const labels: Record<string, string> = {
+    team: 'تیم', sprintId: 'Sprint ID', sprintName: 'Sprint', state: 'وضعیت', sprintOrder: 'ترتیب Sprint',
+    startDate: 'شروع', endDate: 'پایان', calendarDays: 'روز تقویمی', workingDays: 'روز کاری',
+    assigneeKey: 'شناسهٔ فرد', assignee: 'فرد',
+  };
+  const summaryKeys = mode === 'sprints'
+    ? ['scopeIssues', 'scopeSP', 'plannedSP', 'adhocSP', 'committedSP', 'completedIssues', 'completedSP', 'plannedCompletionRateSP', 'completionRateSP', 'scopeChurnRate', 'outgoingCarryoverIssues', 'carryoverRateSP', 'loggedHours', 'capacityHours', 'utilization', 'medianCycleTimeDays', 'estimateAccuracy', 'forecastPlannableSP', 'forecastConfidence', 'storyPointCoverage', 'timeDataCoverage']
+    : ['scopeIssues', 'scopeSP', 'completedIssues', 'completedSP', 'plannedIssues', 'adhocIssues', 'outgoingCarryoverIssues', 'loggedHours', 'capacityHours', 'utilization', 'medianCycleTimeDays', 'estimateAccuracy', 'forecastPlannableSP', 'forecastConfidence', 'storyPointCoverage', 'timeDataCoverage'];
+  const metricKeys = summaryOnly ? summaryKeys : Array.from(new Set(rows.flatMap((row) => Object.keys(row))))
+    .filter((key) => !metadata.includes(key) && rows.some((row) => row[key] === null || ['string', 'number', 'boolean'].includes(typeof row[key])));
+  const formatHeader = (key: string) => labels[key] || key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2');
+  const valueFor = (row: Record<string, any>, key: string) => {
+    const value = row[key];
+    return value === undefined || value === null || (typeof value === 'number' && !Number.isFinite(value)) ? '' : value;
+  };
+  const reportRows = rows.map((row) => [...metadata.map((key) => valueFor(row, key)), ...metricKeys.map((key) => valueFor(row, key))]);
+  const dataSheet = { name: mode === 'sprints' ? 'Sprint Metrics' : 'Person Metrics', rows: [[...metadata.map(formatHeader), ...metricKeys.map(formatHeader)], ...reportRows] };
+  const qualitySheet = { name: 'Data Quality', rows: [
+    ['شدت', 'کد', 'تعداد', 'توضیح'],
+    ...snapshot.quality.findings.map((finding) => [finding.severity, finding.code, finding.count, finding.message]),
+    [], ['فیلد', 'موجود در پاسخ', 'غایب', 'null', 'آرایهٔ خالی', 'موجود'],
+    ...Object.entries(snapshot.quality.fieldCoverage).map(([field, coverage]) => [field, coverage.returned, coverage.missing, coverage.null, coverage.emptyArray, coverage.present]),
+    [], ['شواهد تاریخی', 'تعداد'],
+    ['Issue revisions', snapshot.quality.evidence.issueRevisions], ['Changelog events', snapshot.quality.evidence.issueHistoryEvents],
+    ['Sprint revisions', snapshot.quality.evidence.sprintRevisions], ['Local link events', snapshot.quality.evidence.localLinkEvents],
+  ] };
+  const title = mode === 'sprints' ? 'تحویل اسپرینت و تیم' : 'تحلیل تیم و فرد';
+  return {
+    fileName: `Axiloom-${mode === 'sprints' ? 'delivery' : 'people'}${summaryOnly ? '-summary' : ''}`,
+    title: summaryOnly ? `${title} · خلاصه` : title,
+    subtitle: `${formatNumber(snapshot.summary.issueCount, 0)} issue محلی · XLSX شامل ${formatNumber(metricKeys.length, 0)} ستون متریک است. ساعات از delta تاریخچهٔ timespent به‌دست می‌آیند و worklog دقیق نیست.`,
+    sheets: summaryOnly ? [dataSheet] : [dataSheet, qualitySheet],
+  };
+}
+
+export default function Delivery({ snapshot, openSprint }: { snapshot: Snapshot; openSprint: (sprintId: string) => void }) {
+  const [mode, setMode] = useState<Mode>('sprints');
+  const [team, setTeam] = useState<string[]>([]);
+  const [sprintId, setSprintId] = useState<string[]>([]);
+  const [person, setPerson] = useState<string[]>([]);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const inDateRange = (row: Record<string, any>) => (!from || !to || from <= to) && (!from || String(row.startDate || '').slice(0, 10) >= from) && (!to || String(row.startDate || '').slice(0, 10) <= to);
+  const sprintRows = useMemo(() => snapshot.sprintMetrics.filter((row) => (!team.length || team.includes(row.team)) && (!sprintId.length || sprintId.includes(row.sprintId)) && inDateRange(row)).sort((a, b) => Date.parse(a.startDate) - Date.parse(b.startDate)), [snapshot.sprintMetrics, team, sprintId, from, to]);
+  const personRows = useMemo(() => snapshot.people.filter((row) => (!team.length || team.includes(row.team)) && (!sprintId.length || sprintId.includes(row.sprintId)) && (!person.length || person.includes(row.assigneeKey)) && inDateRange(row)).sort((a, b) => a.team.localeCompare(b.team) || a.assignee.localeCompare(b.assignee) || a.sprintId.localeCompare(b.sprintId)), [snapshot.people, team, sprintId, person, from, to]);
+  const displayed = mode === 'sprints' ? sprintRows : personRows;
+  const sum = (key: string) => sprintRows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
+  const compositionRows = sprintRows.filter((row) => row.plannedSP != null || row.adhocSP != null);
+  const compositionLabels = compositionRows.map((row) => `${row.team} · ${row.sprintName} · #${row.sprintId}`);
+  const compositionData = {
+    labels: compositionLabels,
+    datasets: [
+      { label: 'کل Planned', data: compositionRows.map((row) => Number(row.plannedSP) || 0), backgroundColor: '#b9ded8', borderRadius: 3 },
+      { label: 'Planned انجام‌شده', data: compositionRows.map((row) => Number(row.completedPlannedSP) || 0), backgroundColor: '#168b89', borderRadius: 3 },
+      { label: 'کل Ad hoc', data: compositionRows.map((row) => Number(row.adhocSP) || 0), backgroundColor: '#f0d8b6', borderRadius: 3 },
+      { label: 'Ad hoc انجام‌شده', data: compositionRows.map((row) => Number(row.completedAdhocSP) || 0), backgroundColor: '#d89545', borderRadius: 3 },
+    ],
+  };
+  const compositionOptions = {
+    indexAxis: 'y' as const, responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'index' as const, intersect: false },
+    plugins: { legend: { position: 'bottom' as const, rtl: true, labels: { usePointStyle: true, boxWidth: 8 } }, tooltip: { rtl: true, callbacks: { label: (context: any) => `${context.dataset.label}: ${formatNumber(context.parsed.x)} SP` } } },
+    scales: { x: { beginAtZero: true, title: { display: true, text: 'Story Point' } }, y: { ticks: { autoSkip: false } } },
+  };
+  const exportCurrent = async (pdf = false) => {
+    const report = exportReport(snapshot, displayed, mode, pdf);
+    if (pdf) await window.axiloom.exportPdf(report); else await window.axiloom.exportXlsx(report);
+  };
+
+  return <>
+    <section className="panel filter-panel">
+          <div className="filter-caption"><span className="filter-mark"><LineChart size={17} /></span><div><b>فیلتر گزارش</b><small>فیلتر، ردیف‌های گزارش را محدود می‌کند؛ متریک هر Sprint در مرز واقعی همان Sprint محاسبه شده است.</small></div></div>
+      <div className="filter-controls">
+        <MultiSelect label="تیم‌ها" value={team} options={snapshot.teams.map((value) => ({ value, label: value }))} onChange={(value) => { setTeam(value); setSprintId([]); }} />
+        <MultiSelect label="اسپرینت‌ها" value={sprintId} options={Array.from(new Map(snapshot.sprintMetrics.filter((row) => !team.length || team.includes(row.team)).map((row) => [String(row.sprintId), { value: String(row.sprintId), label: `${row.sprintName} · ${row.team}` }])).values())} onChange={setSprintId} />
+        {mode === 'people' && <MultiSelect label="افراد" value={person} options={Array.from(new Map(snapshot.people.filter((row) => !team.length || team.includes(row.team)).map((row) => [row.assigneeKey, { value: row.assigneeKey, label: `${row.assignee} · ${row.assigneeKey}` }])).values())} onChange={setPerson} />}
+        <label>شروع از<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label>شروع تا<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
+        <div className="filter-actions"><button className="button tiny secondary" onClick={() => exportCurrent(false)}><FileDown size={15} /> XLSX کامل</button><button className="button tiny secondary" onClick={() => exportCurrent(true)}><Download size={15} /> PDF خلاصه</button></div>
+      </div>
+    </section>
+
+    {from && to && from > to && <p className="form-error">تاریخ پایان باید پس از تاریخ شروع باشد.</p>}
+    <div className="subtabs">
+      <button className={mode === 'sprints' ? 'active' : ''} onClick={() => setMode('sprints')}><LineChart size={15} /> تیم و اسپرینت</button>
+      <button className={mode === 'people' ? 'active' : ''} onClick={() => setMode('people')}><UsersRound size={15} /> تحلیل فردی</button>
+      <span className="subtabs-count">{formatNumber(displayed.length, 0)} ردیف</span>
+    </div>
+
+    <DashboardLayout storageKey="delivery" widgets={[
+      { id: 'analytics', title: 'تحلیل روند تیم و اسپرینت', content: <Analytics key={mode} rows={displayed} people={mode === 'people'} openSprint={openSprint} /> },
+      { id: 'composition', title: 'Planned و Ad hoc', content: <section className="panel"><SectionHeading title="تعهد و تحویل Planned / Ad hoc" hint="در هر Team × Sprint، کل Planned با Planned انجام‌شده و کل Ad hoc با Ad hoc انجام‌شده جفت شده‌اند. این جفت‌ها نسبت و اختلاف را بدون حدسِ باقی‌مانده نشان می‌دهند." />
+        <div className="metric-grid six composition-summary"><MetricCard label="کل Planned" value={`${formatNumber(sum('plannedSP'))} SP`} tone="teal" /><MetricCard label="Planned انجام‌شده" value={`${formatNumber(sum('completedPlannedSP'))} SP`} tone="teal" /><MetricCard label="کل Ad hoc" value={`${formatNumber(sum('adhocSP'))} SP`} tone="amber" /><MetricCard label="Ad hoc انجام‌شده" value={`${formatNumber(sum('completedAdhocSP'))} SP`} tone="amber" /><MetricCard label="کل دامنه" value={`${formatNumber(sum('plannedSP') + sum('adhocSP'))} SP`} /><MetricCard label="کل انجام‌شده" value={`${formatNumber(sum('completedPlannedSP') + sum('completedAdhocSP'))} SP`} tone="blue" /></div>
+        {compositionRows.length ? <div className="composition-bar-scroll"><div className="composition-bar-canvas" style={{ height: `${Math.max(300, Math.min(1200, compositionRows.length * 34 + 100))}px` }}><Bar data={compositionData} options={compositionOptions} /></div></div> : <div className="chart-empty">برای Team × Sprint انتخابی SP برنامه و Ad hoc موجود نیست.</div>}
+        <div className="callout info compact-callout">برای هر Team × Sprint، چهار مقدار جدا دیده می‌شود. کارت‌های بالای نمودار هم کل Planned، Planned انجام‌شده، کل Ad hoc، Ad hoc انجام‌شده، مجموع دامنه و مجموع تحویل را در فیلتر انتخابی جمع می‌کنند.</div>
+      </section> },
+      { id: 'flow', title: 'شاخص‌های جریان', content: <section className="panel"><SectionHeading title="شاخص‌های جریان برای هر Team × Sprint" hint="این نما در عرض کامل قرار می‌گیرد تا نام اسپرینت و ستون‌های کیفیت، مصرف، بازگشایی و پیش‌بینی بدون فشردگی خوانده شوند." />
+        <DataTable headers={['تیم', 'اسپرینت', 'ثبات Scope', 'مصرف ظرفیت', 'بازگشایی', 'پوشش SP', 'پوشش زمان', 'Forecast', 'سابقه Forecast']} rows={sprintRows.map((row) => [row.team, <button className="sprint-detail-link table-sprint-link" onClick={() => openSprint(String(row.sprintId))}>{row.sprintName}<small>#{row.sprintId} · جزئیات</small></button>, formatPercent(row.scopeStability), formatPercent(row.utilization), formatPercent(row.reopenedIssueRate), formatPercent(row.storyPointCoverage), formatPercent(row.timeDataCoverage), row.forecastMethod || '—', `${row.forecastConfidence || 'ناموجود'} · ${formatNumber(Number(row.forecastHistorySprints || 0), 0)}`])} empty="پس از انتخاب تیم و import اسپرینت، شاخص‌های جریان نمایش داده می‌شوند." />
+      </section> },
+    ]} />
+
+    <section className="panel table-panel">
+      <SectionHeading title={mode === 'sprints' ? 'تحویل در سطح اسپرینت' : 'بار و جریان هر فرد'} hint={mode === 'people' ? 'آخرین assignee Jira برای تخصیص issue استفاده شده است؛ شاخص‌ها برای coaching و تشخیص گلوگاه‌اند.' : 'تخصیص تیم در مرز Sprint از نگاشت‌های فعال بازسازی می‌شود؛ موارد مبهم یا بدون نگاشت در کیفیت داده باقی می‌مانند.'} />
+      {mode === 'sprints' ? <DataTable headers={['تیم', 'اسپرینت', 'وضعیت', 'Scope', 'Planned SP', 'Ad hoc SP', 'تحویل SP', 'Scope اضافه / حذف', 'Carryover', 'Logged h', 'ظرفیت h', 'مصرف', 'زمان چرخه', 'بازگشایی', 'Forecast', 'کیفیت داده']} rows={sprintRows.map((row) => [<b className="team-name">{row.team}</b>, <button className="sprint-detail-link table-sprint-link" onClick={() => openSprint(String(row.sprintId))}>{row.sprintName}<small>#{row.sprintId} · جزئیات و تاریخچه</small></button>, <StatusBadge value={row.state} />, `${formatNumber(row.scopeIssues, 0)} / ${formatNumber(row.scopeSP)}`, formatNumber(row.plannedSP), formatNumber(row.adhocSP), formatNumber(row.completedSP), `${formatNumber(row.scopeAddedSP)} / ${formatNumber(row.scopeRemovedSP)}`, `${formatNumber(row.outgoingCarryoverIssues, 0)} · ${formatPercent(row.carryoverRateSP)}`, formatNumber(row.loggedHours), formatNumber(row.capacityHours), formatPercent(row.utilization), row.medianCycleTimeDays === null ? '—' : `${formatNumber(row.medianCycleTimeDays)} روز`, formatPercent(row.reopenedIssueRate), <span>{formatNumber(row.forecastPlannableSP)} SP <small className="table-sub">{row.forecastConfidence || '—'}</small></span>, <span>{formatPercent(row.storyPointCoverage)} SP <small className="table-sub">{formatPercent(row.timeDataCoverage)} زمان</small></span>])} empty="هنوز اسپرینت قابل گزارش نیست. مسیر board را در تنظیمات به تیم وصل کنید." /> : <DataTable headers={['تیم', 'فرد', 'Sprint', 'کار', 'SP تخصیص', 'تکمیل', 'SP تحویل', 'Planned / Ad hoc', 'Carryover', 'Logged h', 'ظرفیت h', 'مصرف ظرفیت', 'زمان چرخه', 'دقت تخمین', 'پوشش']} rows={personRows.map((row) => [<b className="team-name">{row.team}</b>, <span className="person-cell"><b>{row.assignee}</b><small>{row.assigneeKey || 'شناسه در دسترس نیست'}</small></span>, <button className="sprint-detail-link table-sprint-link" onClick={() => openSprint(String(row.sprintId))}>{row.sprintName}<small>#{row.sprintId} · جزئیات و تاریخچه</small></button>, formatNumber(row.assignedIssues, 0), formatNumber(row.assignedSP), formatNumber(row.completedIssues, 0), formatNumber(row.completedSP), `${formatNumber(row.plannedIssues, 0)} / ${formatNumber(row.adhocIssues, 0)}`, formatNumber(row.outgoingCarryoverIssues, 0), formatNumber(row.loggedHours), formatNumber(row.capacityHours), formatPercent(row.utilization), row.medianCycleTimeDays === null ? '—' : `${formatNumber(row.medianCycleTimeDays)} روز`, formatPercent(row.estimateAccuracy), `${formatPercent(row.storyPointCoverage)} / ${formatPercent(row.timeDataCoverage)}`])} empty="پس از ورود changelog و تخصیص‌های Jira، تحلیل فردی نمایش داده می‌شود." />}
+    </section>
+    <div className="callout info"><Info size={16} /><span><b>تعریف ساعت:</b> timespent از deltaهای changelog برآورد می‌شود و worklog دقیق نیست. ظرفیت از تاریخ برنامه‌ریزی‌شدهٔ sprint، روزهای کاری دوشنبه تا جمعه و {formatNumber(8, 0)} ساعت در روز محاسبه می‌شود؛ تعطیلات رسمی در این نسخه حذف نمی‌شوند.</span></div>
+  </>;
+}
