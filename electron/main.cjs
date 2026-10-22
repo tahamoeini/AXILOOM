@@ -372,7 +372,7 @@ function registerHandlers() {
   ipcMain.handle('issues:business-report', (_event, filters) => runDataAccessWorker('getBusinessBoardReport', [filters || {}]));
   ipcMain.handle('business:sprint-list', () => runDataAccessWorker('listBusinessSprints'));
   ipcMain.handle('business:sprint-report', (_event, filters) => runDataAccessWorker('getBusinessSprintReport', [filters || {}]));
-  ipcMain.handle('issues:sprint-list', (_event, sprintId, offset, limit) => runDataAccessWorker('listIssues', [{ sprintId, offset, limit, sortBy: 'key' }]));
+  ipcMain.handle('issues:sprint-list', (_event, sprintId, offset, limit) => runDataAccessWorker('listIssues', [{ sprintId, offset, limit, sortBy: 'key', workflowScope: 'delivery' }]));
   ipcMain.handle('issues:details', (_event, key, includeActivity) => runDataAccessWorker('getIssueDetails', [key, Boolean(includeActivity)]));
   ipcMain.handle('issues:activity', (_event, key, offset, limit) => runDataAccessWorker('getIssueActivity', [key, offset, limit]));
   ipcMain.handle('sprints:details', (_event, sprintId) => runDataAccessWorker('getSprintDetails', [sprintId]));

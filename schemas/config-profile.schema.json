@@ -5,6 +5,38 @@
   "type": "object",
   "additionalProperties": true,
   "required": ["schemaVersion", "organization", "sourceInstance", "projects", "projectRoles", "teams", "boardRoutes", "fieldMappings", "workflows", "calendar", "modules"],
+  "$defs": {
+    "workflow": {
+      "type": "object",
+      "properties": {
+        "backlogStatuses": { "$ref": "#/$defs/statusNames" },
+        "readyStatuses": { "$ref": "#/$defs/statusNames" },
+        "startedStatuses": { "$ref": "#/$defs/statusNames" },
+        "blockedStatuses": { "$ref": "#/$defs/statusNames" },
+        "reviewStatuses": { "$ref": "#/$defs/statusNames" },
+        "entryStatuses": { "$ref": "#/$defs/statusNames" },
+        "completedStatuses": { "$ref": "#/$defs/statusNames" },
+        "cancelledStatuses": { "$ref": "#/$defs/statusNames" },
+        "completionStatusCategories": { "type": "array", "uniqueItems": true, "items": { "type": "string", "maxLength": 80 } },
+        "resolutionCompletes": { "type": "boolean" },
+        "milestones": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "label", "statuses"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" },
+              "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+              "statuses": { "$ref": "#/$defs/statusNames" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "statusNames": { "type": "array", "uniqueItems": true, "items": { "type": "string", "maxLength": 160 } }
+  },
   "properties": {
     "schemaVersion": { "const": 2 },
     "configurationRevision": { "type": "integer", "minimum": 0 },
@@ -69,7 +101,15 @@
       "additionalProperties": false
     },
     "fieldMappings": { "type": "array", "items": { "type": "object", "required": ["semanticKey", "providerFieldId"], "properties": { "semanticKey": { "type": "string" }, "providerFieldId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$" }, "providerFieldName": { "type": "string", "maxLength": 200 }, "projectKey": { "type": "string" }, "issueTypeId": { "type": "string" }, "transform": { "enum": ["identity", "number", "text", "option-label", "id-list", "boolean"] } }, "additionalProperties": false } },
-    "workflows": { "type": "object", "additionalProperties": { "type": "object" } },
+    "workflows": {
+      "type": "object",
+      "properties": {
+        "delivery": { "$ref": "#/$defs/workflow" },
+        "intake": { "$ref": "#/$defs/workflow" },
+        "commitment": { "$ref": "#/$defs/workflow" }
+      },
+      "additionalProperties": false
+    },
     "calendar": { "type": "object", "required": ["configured", "timeZone", "workingDays", "hoursPerDay", "holidays"], "properties": { "configured": { "type": "boolean" }, "timeZone": { "type": "string" }, "workingDays": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 6 } }, "hoursPerDay": { "type": "number", "exclusiveMinimum": 0, "maximum": 24 }, "holidays": { "type": "array", "items": { "type": "string", "format": "date" } }, "workIntervals": { "type": "array" } }, "additionalProperties": false },
     "modules": { "type": "object", "additionalProperties": { "type": "boolean" } }
   }

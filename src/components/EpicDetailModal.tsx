@@ -16,7 +16,7 @@ export default function EpicDetailModal({ epic, snapshot, adhocTag, close, openI
       try {
         const all: Array<Record<string, any>> = []; let offset = 0; let total = 0;
         do {
-          const page = await window.axiloom.listIssues({ epic: epic.key, offset, limit: 250, sortBy: 'key' });
+          const page = await window.axiloom.listIssues({ epic: epic.key, workflowScope: 'delivery', offset, limit: 250, sortBy: 'key' });
           all.push(...page.items); total = page.total; offset += page.items.length;
           if (!page.items.length) break;
         } while (offset < total);

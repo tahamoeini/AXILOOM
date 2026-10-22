@@ -89,6 +89,9 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     const statuses = value.split(/[,\n]/).map((item) => item.trim()).filter(Boolean);
     update('workflows', { ...draft.workflows, [scope]: { ...draft.workflows[scope], [key]: statuses } });
   };
+  const updateWorkflowBoolean = (scope: string, key: string, value: boolean) => update('workflows', {
+    ...draft.workflows, [scope]: { ...draft.workflows[scope], [key]: value },
+  });
   const updateMilestones = (scope: string, milestones: AppConfig['workflows'][string]['milestones']) => update('workflows', { ...draft.workflows, [scope]: { ...draft.workflows[scope], milestones } });
   const saveSettings = async () => {
     setWorking('save');
@@ -399,12 +402,15 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     </section>
 
     <section className="panel settings-panel">
-      <SectionHeading title="Workflow semantics" hint="Completion, start and commitment boundaries are configured per product role. Unmapped status names remain visible as unknown." />
+      <SectionHeading title="Workflow semantics" hint="Map exact provider statuses to lifecycle roles for each project role. Completion categories and resolution dates are explicit policies; unknown current and historical statuses stay visible." />
       <div className="form-grid">{[
-        ['delivery', 'Delivery', [['completedStatuses', 'Completed'], ['startedStatuses', 'Started'], ['blockedStatuses', 'Blocked'], ['cancelledStatuses', 'Cancelled']]],
-        ['intake', 'Product intake', [['completedStatuses', 'Completed']]],
-        ['commitment', 'Commitments', [['entryStatuses', 'Commitment entry'], ['completedStatuses', 'Completed']]],
-      ].map(([scope, label, fields]: any) => <fieldset className="workflow-fieldset" key={scope}><legend>{label}</legend>{fields.map(([key, name]: string[]) => <label className="form-field" key={key}><span>{name} statuses</span><input value={statusText(draft.workflows[scope]?.[key])} onChange={(event) => updateWorkflow(scope, key, event.target.value)} placeholder="Comma-separated exact status names" /></label>)}</fieldset>)}</div>
+        ['delivery', 'Delivery', [['backlogStatuses', 'Backlog'], ['readyStatuses', 'Ready'], ['startedStatuses', 'Started'], ['blockedStatuses', 'Blocked'], ['reviewStatuses', 'Review'], ['completedStatuses', 'Delivered'], ['cancelledStatuses', 'Cancelled']]],
+        ['intake', 'Product intake', [['backlogStatuses', 'Backlog'], ['readyStatuses', 'Ready'], ['startedStatuses', 'Started'], ['blockedStatuses', 'Blocked'], ['reviewStatuses', 'Review'], ['completedStatuses', 'Delivered'], ['cancelledStatuses', 'Cancelled']]],
+        ['commitment', 'Commitments', [['backlogStatuses', 'Backlog'], ['readyStatuses', 'Ready'], ['startedStatuses', 'Started'], ['blockedStatuses', 'Blocked'], ['reviewStatuses', 'Review'], ['entryStatuses', 'Commitment entry'], ['completedStatuses', 'Delivered'], ['cancelledStatuses', 'Cancelled']]],
+      ].map(([scope, label, fields]: any) => <fieldset className="workflow-fieldset" key={scope}><legend>{label}</legend>{fields.map(([key, name]: string[]) => <label className="form-field" key={key}><span>{name} statuses</span><input value={statusText(draft.workflows[scope]?.[key])} onChange={(event) => updateWorkflow(scope, key, event.target.value)} placeholder="Comma-separated exact status names" /></label>)}
+        <label className="form-field"><span>Completion status category keys</span><input value={statusText(draft.workflows[scope]?.completionStatusCategories)} onChange={(event) => updateWorkflow(scope, 'completionStatusCategories', event.target.value)} placeholder="done" /></label>
+        <label className="check-row"><input type="checkbox" checked={draft.workflows[scope]?.resolutionCompletes !== false} onChange={(event) => updateWorkflowBoolean(scope, 'resolutionCompletes', event.target.checked)} /><span>A recorded Jira resolution counts as completed</span></label>
+      </fieldset>)}</div>
       <div className="workflow-milestones">{(['delivery', 'intake', 'commitment'] as const).map((scope) => <fieldset className="workflow-fieldset" key={`${scope}-milestones`}><legend>{scope} milestones</legend>{(draft.workflows[scope]?.milestones || []).map((milestone, index) => <div className="team-row" key={milestone.id}>
         <label className="form-field"><span>Stable ID</span><input value={milestone.id} onChange={(event) => updateMilestones(scope, draft.workflows[scope].milestones.map((item, current) => current === index ? { ...item, id: event.target.value } : item))} /></label>
         <label className="form-field"><span>Label</span><input value={milestone.label} onChange={(event) => updateMilestones(scope, draft.workflows[scope].milestones.map((item, current) => current === index ? { ...item, label: event.target.value } : item))} /></label>

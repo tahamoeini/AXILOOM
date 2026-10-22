@@ -66,6 +66,17 @@ assert.equal(migrated.teams[0].name, 'Research');
 assert.deepEqual(migrated.workflows.delivery.completedStatuses, ['Finished']);
 assert.deepEqual(migrated.fieldMappings, []);
 assert.equal(migrated.calendar.configured, false);
+const workflowProfile = validateConfig({
+  projects: ['PLATFORM'],
+  projectRoles: { technicalDelivery: ['PLATFORM'] },
+  workflows: { delivery: {
+    startedStatuses: ['In Progress'], blockedStatuses: ['Blocked'], completionStatusCategories: ['closed'], resolutionCompletes: false,
+  } },
+});
+assert.equal(workflowProfile.workflows.delivery.resolutionCompletes, false, 'an explicit resolution policy survives normalization');
+assert.deepEqual(workflowProfile.workflows.delivery.completionStatusCategories, ['closed']);
+assert.throws(() => normalizeConfig({ workflows: { delivery: { resolutionCompletes: 'false' } } }), /must be boolean/,
+  'invalid resolution policy values must not silently fall back to true');
 
 assert.throws(() => validateConfig({ projects: ['BAD KEY'] }), /Invalid project key/);
 assert.throws(() => validateConfig({ jiraUrl: 'http://jira.example.test' }), /HTTPS/);

@@ -4,7 +4,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { gzipSync, gunzipSync } = require('node:zlib');
 const { DatabaseSync } = require('node:sqlite');
 const { DEFAULT_CONFIG, normalizeConfig, validateConfig, configurationFingerprint, sourceIdentityKey } = require('./configuration.cjs');
-const { resolveSemanticFields, isIssueDone } = require('./semantic-mapping.cjs');
+const { resolveSemanticFields, isIssueDone, completionPolicyForProject, lifecycleRolesForStatus } = require('./semantic-mapping.cjs');
 
 function openDatabase(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -984,20 +984,48 @@ function parseCurrentSprintIds(value) {
   return Array.from(ids);
 }
 
-function issueDoneSql(config) {
+function issueDoneSql(config, scope = '') {
+  const projects = new Map();
+  Object.values(config?.projectRoles || {}).flat().forEach((projectValue) => {
+    const project = String(projectValue || '').trim().toUpperCase();
+    if (project && !projects.has(project)) projects.set(project, completionPolicyForProject(config, project, scope));
+  });
+  const completionClause = (policy) => {
+    const clauses = [];
+    const categories = [...policy.completionStatusCategories].sort();
+    const statuses = [...policy.completedStatuses].sort();
+  const params = [];
+    if (categories.length) {
+      clauses.push(`lower(trim(COALESCE(status_category,''))) IN (${categories.map(() => '?').join(',')})`);
+      params.push(...categories);
+    }
+    if (policy.resolutionCompletes) clauses.push("COALESCE(resolution_date,'')<>''");
+    if (statuses.length) {
+      clauses.push(`lower(trim(COALESCE(status_name,''))) IN (${statuses.map(() => '?').join(',')})`);
+      params.push(...statuses);
+    }
+    return { sql: clauses.length ? `(${clauses.join(' OR ')})` : '0', params };
+  };
+  const groups = new Map();
+  for (const [project, policy] of projects) {
+    const signature = JSON.stringify([ [...policy.completionStatusCategories].sort(), policy.resolutionCompletes, [...policy.completedStatuses].sort() ]);
+    if (!groups.has(signature)) groups.set(signature, { projects: [], policy });
+    groups.get(signature).projects.push(project);
+  }
   const rules = [];
   const params = [];
-  const workflowForRole = { productIntake: 'intake', technicalDelivery: 'delivery', commitments: 'commitment' };
-  for (const [role, projects] of Object.entries(config?.projectRoles || {})) {
-    const completed = config?.workflows?.[workflowForRole[role] || role]?.completedStatuses || [];
-    const keys = (projects || []).map((key) => String(key).toUpperCase());
-    if (!completed.length || !keys.length) continue;
-    rules.push(`(project_key IN (${keys.map(() => '?').join(',')}) AND lower(trim(COALESCE(status_name,''))) IN (${completed.map(() => '?').join(',')}))`);
-    params.push(...keys, ...completed.map((status) => String(status).trim().toLocaleLowerCase('en-US')));
-  }
-  const configured = rules.length ? ` OR ${rules.join(' OR ')}` : '';
+  groups.forEach((group) => {
+    const completion = completionClause(group.policy);
+    rules.push(`(project_key IN (${group.projects.map(() => '?').join(',')}) AND ${completion.sql})`);
+    params.push(...group.projects, ...completion.params);
+  });
+  const defaultCompletion = completionClause(completionPolicyForProject(config, '', scope));
+  if (projects.size) {
+    rules.push(`(project_key NOT IN (${[...projects.keys()].map(() => '?').join(',')}) AND ${defaultCompletion.sql})`);
+    params.push(...projects.keys(), ...defaultCompletion.params);
+  } else rules.push(defaultCompletion.sql);
   return {
-    sql: `(lower(COALESCE(status_category,''))='done' OR COALESCE(resolution_date,'')<>''${configured})`,
+    sql: `(${rules.join(' OR ')})`,
     params,
   };
 }
@@ -1045,19 +1073,22 @@ function buildIssueWhere(filters, config) {
     params.push(query, query, query);
   }
   if (filters.done === true || filters.done === false) {
-    const done = issueDoneSql(config);
+    const done = issueDoneSql(config, filters.workflowScope);
     where.push(filters.done ? done.sql : `NOT ${done.sql}`);
     params.push(...done.params);
   }
   return { sql: where.join(' AND '), params };
 }
 
-function mapIssueProjection(row, config) {
+function mapIssueProjection(row, config, workflowScope = '') {
   const project = String(row.project_key || row.issue_key?.split('-')[0] || '').toUpperCase();
   const raw = safeJson(row.raw_json, {});
   const fields = raw.fields || {};
   const semantic = resolveSemanticFields(raw, config);
-  const done = isIssueDone(raw, config);
+  const done = isIssueDone(raw, config, workflowScope);
+  const status = row.status_name || '';
+  const statusCategory = row.status_category || '';
+  const resolutionDate = row.resolution_date || '';
   const links = safeJson(row.issue_links_json, []);
   const issueLinks = (Array.isArray(links) ? links : []).flatMap((link) => {
     const type = link?.type || {};
@@ -1069,9 +1100,9 @@ function mapIssueProjection(row, config) {
   const components = safeJson(row.components_json, []);
   return {
     id: row.jira_id, key: row.issue_key, project,
-    summary: row.summary_text || '', issueType: row.issue_type_name || 'Unknown', status: row.status_name || '',
-    statusCategory: row.status_category || '', assigneeKey: row.assignee_key || fields.assignee?.accountId || '', assignee: row.assignee_name || 'تخصیص‌نیافته',
-    created: row.created_at || '', dueDate: row.due_date || '', updated: row.updated_at || '', resolutionDate: row.resolution_date || '',
+    summary: row.summary_text || '', issueType: row.issue_type_name || 'Unknown', status, lifecycleRoles: lifecycleRolesForStatus(config, project, status, statusCategory, Boolean(resolutionDate), workflowScope),
+    statusCategory, assigneeKey: row.assignee_key || fields.assignee?.accountId || '', assignee: row.assignee_name || 'تخصیص‌نیافته',
+    created: row.created_at || '', dueDate: row.due_date || '', updated: row.updated_at || '', resolutionDate,
     points: typeof semantic.storyPoints === 'number' ? semantic.storyPoints : null,
     epicLink: typeof semantic.epicLink === 'string' ? semantic.epicLink.toUpperCase() : '',
     currentSprintIds: parseCurrentSprintIds(semantic.sprint),
@@ -1097,14 +1128,14 @@ function listIssues(db, filters = {}) {
   const rows = db.prepare(`SELECT jira_id,issue_key,project_key,updated_at,summary_text,issue_type_name,status_name,status_category,
       assignee_name,assignee_key,created_at,resolution_date,priority_name,components_json,issue_links_json,due_date,raw_json
     FROM jira_issues WHERE ${sql} ORDER BY ${sort} ${direction},issue_key ASC LIMIT ? OFFSET ?`).all(...params, limit, offset);
-  const done = issueDoneSql(config);
+  const done = issueDoneSql(config, filters.workflowScope);
   const aggregates = db.prepare(`SELECT
       SUM(CASE WHEN ${done.sql} THEN 1 ELSE 0 END) AS done_count,
       SUM(CASE WHEN COALESCE(assignee_key,json_extract(raw_json,'$.fields.assignee.accountId'),'')='' THEN 1 ELSE 0 END) AS unassigned_count,
       SUM(CASE WHEN EXISTS (SELECT 1 FROM jira_semantic_projection semantic WHERE semantic.issue_key=jira_issues.issue_key AND COALESCE(semantic.epic_key,'')<>'') THEN 1 ELSE 0 END) AS epic_link_count
     FROM jira_issues WHERE ${sql}`).get(...done.params, ...params);
   return {
-    items: rows.map((row) => mapIssueProjection(row, config)), total,
+    items: rows.map((row) => mapIssueProjection(row, config, filters.workflowScope)), total,
     doneCount: Number(aggregates?.done_count || 0), openCount: Math.max(0, total - Number(aggregates?.done_count || 0)),
     withoutAssignee: Number(aggregates?.unassigned_count || 0), withEpicLink: Number(aggregates?.epic_link_count || 0),
     offset, limit, hasMore: offset + rows.length < total,

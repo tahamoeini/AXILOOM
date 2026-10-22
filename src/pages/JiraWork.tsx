@@ -31,6 +31,7 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
   const [statuses, setStatuses] = useState<string[]>([]);
   useEffect(() => { if (!projects.includes(project)) setProject(projects[0] || ''); }, [projects.join('|'), project]);
   const isIntake = intake;
+  const workflowScope = isIntake ? 'intake' : 'commitment';
   const kind = isIntake ? 'request' : 'action';
   const label = isIntake ? 'Product intake' : 'Commitments';
   const localRecords = snapshot.records.filter((record) => record.kind === kind);
@@ -39,24 +40,24 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
   useEffect(() => {
     let active = true;
     if (!project) { setStats(emptyList); setStatuses([]); return () => { active = false; }; }
-    Promise.all([window.axiloom.listIssues({ project, limit: 1 }), window.axiloom.getIssueFilterOptions(project)])
+    Promise.all([window.axiloom.listIssues({ project, workflowScope, limit: 1 }), window.axiloom.getIssueFilterOptions(project)])
       .then(([result, options]) => { if (active) { setStats(result); setStatuses(options.statuses); } })
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : 'Issue summary could not be loaded.'); });
     return () => { active = false; };
-  }, [project, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
+  }, [project, workflowScope, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
 
   useEffect(() => {
     let active = true;
     if (!project) { setList(emptyList); setLoading(false); return () => { active = false; }; }
     setLoading(true); setError('');
     const timer = setTimeout(() => {
-      window.axiloom.listIssues({ project, status, query, offset, limit: 50, sortBy: 'updated', sortDirection: 'desc' })
+      window.axiloom.listIssues({ project, status, query, workflowScope, offset, limit: 50, sortBy: 'updated', sortDirection: 'desc' })
         .then((result) => { if (active) setList(result); })
         .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : 'Issue list could not be loaded.'); })
         .finally(() => { if (active) setLoading(false); });
     }, query ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
-  }, [project, status, query, offset, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
+  }, [project, status, query, workflowScope, offset, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
 
   async function exportAll(format: 'xlsx' | 'pdf') {
     setError('');
@@ -64,16 +65,16 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
       const issues: Array<Record<string, any>> = [];
       let nextOffset = 0, total = list.total;
       do {
-        const result = await window.axiloom.listIssues({ project, status, query, offset: nextOffset, limit: 250, sortBy: 'updated', sortDirection: 'desc' });
+        const result = await window.axiloom.listIssues({ project, status, query, workflowScope, offset: nextOffset, limit: 250, sortBy: 'updated', sortDirection: 'desc' });
         issues.push(...result.items); total = result.total; nextOffset += result.items.length;
         if (!result.items.length) break;
       } while (nextOffset < total);
       const report: ExportReport = {
         fileName: 'Axiloom-' + project, title: label + ' · ' + project,
         subtitle: total + ' Jira issues. Field values use the active semantic mappings.',
-        sheets: [{ name: project, rows: [['Key', 'Summary', 'Type', 'Components', 'Assignee', 'Status', 'Priority', 'Created', 'Updated', 'Requester', 'Department', 'Product owner', 'Story points', 'Epic link'],
-          ...issues.map((issue) => [issue.key, issue.summary, issue.issueType, issue.components.join(', '), issue.assignee, issue.status, issue.priority,
-            issue.created, issue.updated, issue.requester || '', issue.department || '', issue.productOwner || '', issue.points ?? '', issue.epicLink || ''])] }],
+        sheets: [{ name: project, rows: [['Key', 'Summary', 'Type', 'Components', 'Assignee', 'Status', 'Lifecycle roles', 'Priority', 'Created', 'Updated', 'Requester', 'Department', 'Product owner', 'Story points', 'Epic link'],
+          ...issues.map((issue) => [issue.key, issue.summary, issue.issueType, issue.components.join(', '), issue.assignee, issue.status,
+            (issue.lifecycleRoles || []).join(', '), issue.priority, issue.created, issue.updated, issue.requester || '', issue.department || '', issue.productOwner || '', issue.points ?? '', issue.epicLink || ''])] }],
       };
       await (format === 'xlsx' ? window.axiloom.exportXlsx(report) : window.axiloom.exportPdf(report));
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Export failed.'); }
@@ -93,11 +94,11 @@ export default function JiraWork({ projects, intake, config, snapshot, openIssue
     {project && <div className="callout info">This view reads project <b>{project}</b> using the role assigned in setup. Issue details, edit controls, and local product records remain separate and auditable.</div>}
     <div className="metric-grid four"><MetricCard label="Issues" value={formatNumber(stats.total, 0)} /><MetricCard label="Open" value={formatNumber(stats.openCount, 0)} tone="amber" /><MetricCard label="Completed" value={formatNumber(stats.doneCount, 0)} tone="teal" /><MetricCard label="Unassigned" value={formatNumber(stats.withoutAssignee, 0)} tone="red" /></div>
     <section className="panel table-panel">
-      <SectionHeading title={project ? label + ' · ' + project : label} hint="Sorted by latest update; 50 issues per page. Completion follows configured workflow semantics and Jira resolution data."
+      <SectionHeading title={project ? label + ' · ' + project : label} hint="Sorted by latest update; 50 issues per page. Completion follows this role's status categories, mapped statuses, and resolution policy."
         action={config?.jiraUrl && project ? <button className="button primary" onClick={() => setCreating(true)}>Create issue</button> : undefined} />
-      <DataTable headers={['Key', 'Summary', 'Type', 'Components', 'Assignee', 'Requester', 'Department', 'Status', 'Priority', 'Created', 'Updated', 'Links', 'Details']}
+      <DataTable headers={['Key', 'Summary', 'Type', 'Components', 'Assignee', 'Requester', 'Department', 'Status', 'Lifecycle roles', 'Priority', 'Created', 'Updated', 'Links', 'Details']}
         rows={list.items.map((issue) => [<IssueKey value={issue.key} onOpen={openIssue} />, issue.summary, issue.issueType, issue.components.join(', '), issue.assignee,
-          issue.requester || '—', issue.department || '—', <StatusBadge value={issue.status} />, issue.priority || '—', formatDate(issue.created), formatDate(issue.updated),
+          issue.requester || '—', issue.department || '—', <StatusBadge value={issue.status} />, (issue.lifecycleRoles || []).join(', ') || '—', issue.priority || '—', formatDate(issue.created), formatDate(issue.updated),
           issue.issueLinks.map((link: any) => <IssueKey key={link.id + '-' + link.key} value={link.key} onOpen={openIssue} />),
           <button className="button tiny secondary" onClick={() => openIssue(issue.key)}>Open details</button>])}
         empty={project ? 'No issues have been imported for this project.' : 'No project is assigned to this role.'} serverPagination={{ offset, limit: 50, total: list.total, loading, onPageChange: setOffset }} />

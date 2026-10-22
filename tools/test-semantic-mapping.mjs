@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { resolveSemanticValue, semanticHistoryField, transformValue } = require('../electron/semantic-mapping.cjs');
+const {
+  resolveSemanticValue, semanticHistoryField, transformValue, isIssueDone,
+  normalizeWorkflowScope, completionPolicyForProject, lifecycleStatusesForProject, lifecycleRolesForStatus, workflowScopesForProject,
+} = require('../electron/semantic-mapping.cjs');
 const { normalizeConfig } = require('../electron/configuration.cjs');
 const { calculateMetrics } = require('../electron/metrics.cjs');
 
@@ -65,6 +68,60 @@ assert.equal(semanticHistoryField({ fieldId: 'customfield_shared', field: 'Confl
     { semanticKey: 'loggedTime', providerFieldId: 'customfield_shared', transform: 'number' },
   ],
 }, alphaStory), 'Conflicting field', 'equally scoped history mappings with different meanings remain unmapped');
+
+const workflowConfig = normalizeConfig({
+  projects: ['ALPHA', 'BETA'],
+  projectRoles: { technicalDelivery: ['ALPHA'], productIntake: ['BETA'] },
+  workflows: {
+    delivery: {
+      backlogStatuses: ['Open'], readyStatuses: ['Ready'], startedStatuses: ['Doing'], blockedStatuses: ['Blocked'],
+      reviewStatuses: ['Review'], completedStatuses: ['Released'], cancelledStatuses: ['Cancelled'],
+      completionStatusCategories: ['closed'], resolutionCompletes: false,
+    },
+    intake: { completedStatuses: ['Approved'], completionStatusCategories: [], resolutionCompletes: false },
+  },
+});
+const policyIssue = (project, status, category = '', resolutiondate = '') => ({
+  key: `${project}-1`, fields: { project: { key: project }, status: { name: status, statusCategory: { key: category } }, resolutiondate },
+});
+assert.equal(isIssueDone(policyIssue('ALPHA', 'Released'), workflowConfig), true, 'configured completion labels count as done');
+assert.equal(isIssueDone(policyIssue('ALPHA', 'Closed', 'closed'), workflowConfig), true, 'configured completion categories count as done');
+assert.equal(isIssueDone(policyIssue('ALPHA', 'Done', 'done', '2026-01-01'), workflowConfig), false,
+  'unselected category and resolution signals do not override a workflow policy');
+assert.equal(isIssueDone(policyIssue('BETA', 'Approved'), workflowConfig), true);
+assert.equal(isIssueDone(policyIssue('BETA', 'Done', 'done'), workflowConfig), false, 'an empty category list disables implicit Jira Done completion');
+assert.deepEqual([...completionPolicyForProject(workflowConfig, 'ALPHA').completionStatusCategories], ['closed']);
+assert.deepEqual([...lifecycleStatusesForProject(workflowConfig, 'ALPHA', 'started')], ['doing']);
+assert.deepEqual(lifecycleRolesForStatus(workflowConfig, 'ALPHA', 'Doing'), ['started']);
+assert.deepEqual(lifecycleRolesForStatus(workflowConfig, 'ALPHA', 'Released'), ['delivered']);
+
+const overlappingWorkflowConfig = normalizeConfig({
+  projects: ['MULTI'],
+  projectRoles: { technicalDelivery: ['MULTI'], productIntake: ['MULTI'], commitments: ['MULTI'] },
+  workflows: {
+    delivery: { startedStatuses: ['Building'], completedStatuses: ['Shipped'], completionStatusCategories: ['closed'], resolutionCompletes: false },
+    intake: { startedStatuses: ['Triaged'], completedStatuses: ['Accepted'], completionStatusCategories: [], resolutionCompletes: false },
+    commitment: { completedStatuses: ['Approved'], completionStatusCategories: ['resolved'], resolutionCompletes: false },
+  },
+});
+const multiIssue = (status, category = '', resolutiondate = '') => policyIssue('MULTI', status, category, resolutiondate);
+assert.equal(normalizeWorkflowScope('technicalDelivery'), 'delivery');
+assert.equal(normalizeWorkflowScope('__proto__'), '', 'unknown workflow scopes do not resolve through object prototype keys');
+assert.deepEqual(workflowScopesForProject(overlappingWorkflowConfig, 'MULTI').sort(), ['commitment', 'delivery', 'intake']);
+assert.equal(isIssueDone(multiIssue('Accepted'), overlappingWorkflowConfig, 'intake'), true);
+assert.equal(isIssueDone(multiIssue('Accepted'), overlappingWorkflowConfig, 'delivery'), false,
+  'an intake completion label does not complete the same project issue for delivery');
+assert.equal(isIssueDone(multiIssue('Shipped'), overlappingWorkflowConfig, 'delivery'), true);
+assert.equal(isIssueDone(multiIssue('Shipped'), overlappingWorkflowConfig, 'intake'), false,
+  'a delivery completion label does not complete the same project issue for intake');
+assert.equal(isIssueDone(multiIssue('Any', 'closed'), overlappingWorkflowConfig, 'delivery'), true);
+assert.equal(isIssueDone(multiIssue('Any', 'closed'), overlappingWorkflowConfig, 'commitment'), false,
+  'category completion is isolated by role');
+assert.equal(isIssueDone(multiIssue('Any', 'resolved'), overlappingWorkflowConfig, 'commitment'), true);
+assert.equal(isIssueDone(multiIssue('Any', 'indeterminate', '2026-01-01'), overlappingWorkflowConfig, 'intake'), false,
+  'resolution completion is independently disabled for intake');
+assert.deepEqual(lifecycleRolesForStatus(overlappingWorkflowConfig, 'MULTI', 'Triaged', '', false, 'intake'), ['started']);
+assert.deepEqual(lifecycleRolesForStatus(overlappingWorkflowConfig, 'MULTI', 'Triaged', '', false, 'delivery'), []);
 
 for (const value of [null, undefined, '', '   ', 'not-a-number', '0x10', true, [], {}]) {
   assert.equal(transformValue(value, 'number'), null, `invalid or missing numeric values stay null (${String(value)})`);

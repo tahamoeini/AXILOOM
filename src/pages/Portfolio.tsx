@@ -8,6 +8,7 @@ export default function Portfolio({ snapshot, config, openIssue }: { snapshot: S
   const [project, setProject] = useState('');
   const [teamId, setTeamId] = useState('');
   const [issueType, setIssueType] = useState('');
+  const [workflowScope, setWorkflowScope] = useState<'all' | 'delivery' | 'intake' | 'commitment'>('all');
   const [status, setStatus] = useState('');
   const [epic, setEpic] = useState('');
   const [query, setQuery] = useState('');
@@ -21,27 +22,28 @@ export default function Portfolio({ snapshot, config, openIssue }: { snapshot: S
   const [issueLoading, setIssueLoading] = useState(false);
   const [issueError, setIssueError] = useState('');
   const [selectedEpic, setSelectedEpic] = useState<{ key: string; summary?: string; epicName?: string } | null>(null);
+  const selectedWorkflowScope = workflowScope === 'all' ? undefined : workflowScope;
 
   useEffect(() => {
     if (tab !== 'issues') return;
     let active = true;
-    Promise.all([window.axiloom.getIssueFilterOptions(), window.axiloom.getIssueOverviewStats()])
-      .then(([options, stats]) => { if (active) { setIssueOptions(options); setIssueStats({issueCount:stats.issueCount,openCount:stats.openCount,epicLinkedCount:stats.epicLinkedCount}); } })
+    Promise.all([window.axiloom.getIssueFilterOptions(), window.axiloom.listIssues({workflowScope:selectedWorkflowScope,limit:1})])
+      .then(([options, stats]) => { if (active) { setIssueOptions(options); setIssueStats({issueCount:stats.total,openCount:stats.openCount,epicLinkedCount:stats.withEpicLink}); } })
       .catch((error) => { if (active) setIssueError(error instanceof Error ? error.message : 'فیلترهای issue خوانده نشدند.'); });
     return () => { active = false; };
-  }, [snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
+  }, [tab, selectedWorkflowScope, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
 
   useEffect(() => {
     let active = true;
     setIssueLoading(true); setIssueError('');
-    const filters: IssueListFilters = { project, issueType, status, epic, query, createdFrom:from, createdTo:to, offset:issueOffset, limit:50, sortBy:'key' };
+    const filters: IssueListFilters = { project, issueType, status, epic, query, createdFrom:from, createdTo:to, workflowScope:selectedWorkflowScope, offset:issueOffset, limit:50, sortBy:'key' };
     const timer = setTimeout(() => {
       window.axiloom.listIssues(filters).then((result) => { if (active) setIssueList(result); })
         .catch((error) => { if (active) setIssueError(error instanceof Error ? error.message : 'فهرست issue خوانده نشد.'); })
         .finally(() => { if (active) setIssueLoading(false); });
     }, query ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
-  }, [tab, project, issueType, status, epic, query, from, to, issueOffset, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
+  }, [tab, project, issueType, status, epic, query, from, to, workflowScope, issueOffset, snapshot.summary.issueCount, snapshot.summary.lastIssueUpdate]);
 
   const filteredIssues = issueList.items;
   const filteredEpics = useMemo(() => snapshot.epics.filter((item) => (!project || item.project === project)
@@ -62,7 +64,7 @@ export default function Portfolio({ snapshot, config, openIssue }: { snapshot: S
     const all: Array<Record<string, any>> = [];
     let offset = 0; let total = issueList.total;
     do {
-      const result = await window.axiloom.listIssues({project,issueType,status,epic,query,createdFrom:from,createdTo:to,offset,limit:250,sortBy:'key'});
+      const result = await window.axiloom.listIssues({project,issueType,status,epic,query,createdFrom:from,createdTo:to,workflowScope:selectedWorkflowScope,offset,limit:250,sortBy:'key'});
       all.push(...result.items); total = result.total; offset += result.items.length;
       if (!result.items.length) break;
     } while (offset < total);
@@ -85,6 +87,7 @@ export default function Portfolio({ snapshot, config, openIssue }: { snapshot: S
       <div className="portfolio-controls">
         <label className="search-field"><span>متن یا کلید Jira</span><div><Search size={15} /><input value={query} onChange={(event) => setFilter(() => setQuery(event.target.value))} placeholder="کلید یا بخشی از عنوان" /></div></label>
         <label>پروژه<select value={project} onChange={(event) => setFilter(() => setProject(event.target.value))}><option value="">همه</option>{issueOptions.projects.map((value) => <option key={value}>{value}</option>)}</select></label>
+        {tab === 'issues' && <label>سیاست Workflow<select value={workflowScope} onChange={(event) => setFilter(() => setWorkflowScope(event.target.value as typeof workflowScope))}><option value="all">ترکیب نقش‌های پروژه</option><option value="delivery">تحویل</option><option value="intake">درخواست محصول</option><option value="commitment">تعهد</option></select></label>}
         {tab === 'epics' && <label>تیم تحویل<select value={teamId} onChange={(event) => setFilter(() => setTeamId(event.target.value))}><option value="">همهٔ تیم‌ها</option>{(config?.teams || []).map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>}
         <label>Epic<select value={epic} onChange={(event) => setFilter(() => setEpic(event.target.value))}><option value="">همهٔ Epicها</option>{issueOptions.epics.map((item) => <option key={item.key} value={item.key}>{item.key} · {item.summary}</option>)}</select></label>
         <label>نوع کار<select value={issueType} onChange={(event) => setFilter(() => setIssueType(event.target.value))}><option value="">همه</option>{issueOptions.issueTypes.map((value) => <option key={value}>{value}</option>)}</select></label>

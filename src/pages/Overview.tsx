@@ -9,7 +9,11 @@ export default function Overview({ snapshot, config, goTo, openIssue }: { snapsh
   const [recentIssues,setRecentIssues]=useState<Array<Record<string,any>>>([]);
   const [currentUser,setCurrentUser]=useState<{key?:string;name?:string;accountId?:string;displayName?:string}|null>(null);
   const [followUpProject,setFollowUpProject]=useState('all');
-  const followUpProjects = Array.from(new Set([...(config?.projectRoles.productIntake || []), ...(config?.projectRoles.commitments || [])]));
+  const followUpAssignments = [
+    ...(config?.projectRoles.productIntake || []).map((project) => ({ project, workflowScope: 'intake' as const })),
+    ...(config?.projectRoles.commitments || []).map((project) => ({ project, workflowScope: 'commitment' as const })),
+  ];
+  const followUpProjects = Array.from(new Set(followUpAssignments.map((assignment) => assignment.project)));
   const [followUpError,setFollowUpError]=useState('');
   const latest = useMemo(() => {
     const map = new Map<string, Record<string, any>>();
@@ -24,12 +28,13 @@ export default function Overview({ snapshot, config, goTo, openIssue }: { snapsh
     let active=true; const assignee=currentUser?.key||currentUser?.name||currentUser?.accountId;
     if(!assignee){setRecentIssues([]);setFollowUpError('برای فهرست پیگیری‌های شخصی، اتصال Jira و هویت کاربر جاری لازم است.');return()=>{active=false;};}
     if (!followUpProjects.length) { setRecentIssues([]); setFollowUpError('No intake or commitment projects are configured yet.'); return () => { active = false; }; }
-    setFollowUpError(''); const projects=followUpProject==='all'?followUpProjects:[followUpProject];
-    Promise.all(projects.map((project)=>window.axiloom.listIssues({project,assignee,done:false,limit:25,sortBy:'updated',sortDirection:'desc'})))
-      .then((results)=>{if(active)setRecentIssues(results.flatMap((result)=>result.items).sort((a,b)=>Date.parse(b.updated||'')-Date.parse(a.updated||'')).slice(0,15));})
+    setFollowUpError('');
+    const assignments=followUpAssignments.filter((assignment)=>followUpProject==='all'||assignment.project===followUpProject);
+    Promise.all(assignments.map(({project,workflowScope})=>window.axiloom.listIssues({project,workflowScope,assignee,done:false,limit:25,sortBy:'updated',sortDirection:'desc'})))
+      .then((results)=>{if(active){const unique=new Map<string,Record<string,any>>();results.flatMap((result)=>result.items).forEach((issue)=>unique.set(issue.key,issue));setRecentIssues(Array.from(unique.values()).sort((a,b)=>Date.parse(b.updated||'')-Date.parse(a.updated||'')).slice(0,15));}})
       .catch((error)=>{if(active){setRecentIssues([]);setFollowUpError(error instanceof Error?error.message:'پیگیری‌های فردی از Jira خوانده نشدند.');}});
     return()=>{active=false;};
-  },[currentUser,followUpProject,followUpProjects.join('|'),snapshot.summary.issueCount,snapshot.summary.lastIssueUpdate]);
+  },[currentUser,followUpProject,followUpAssignments.map((assignment)=>assignment.workflowScope+':'+assignment.project).join('|'),snapshot.summary.issueCount,snapshot.summary.lastIssueUpdate]);
   const projectTotal = Math.max(1, ...snapshot.summary.projectCounts.map((item) => item.count));
   const ready = snapshot.summary.issueCount > 0 || snapshot.records.length > 0;
 

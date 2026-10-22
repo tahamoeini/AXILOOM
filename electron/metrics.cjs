@@ -1,4 +1,8 @@
-const { resolveSemanticBinding, resolveSemanticFields, semanticHistoryField, transformValue, configuredCompletedStatuses, isIssueDone } = require('./semantic-mapping.cjs');
+const {
+  resolveSemanticBinding, resolveSemanticFields, semanticHistoryField, transformValue, configuredCompletedStatuses, isIssueDone,
+  resolutionCompletesForProject, statusCategoryCompletesForProject, hasLifecycleStatusMappings,
+  lifecycleStatusesForProject, lifecycleRolesForStatus, workflowScopesForProject,
+} = require('./semantic-mapping.cjs');
 const { isActiveAt, resolveBoardTeam, resolveTeamAttribution } = require('./team-attribution.cjs');
 
 const KNOWN_FIELDS = new Set([
@@ -274,17 +278,30 @@ function makeRelation(issue, sprint, interval, config) {
     if (value && typeof value === 'object') return value.name || '';
     return String(value || '');
   });
-  const doneStatuses = configuredCompletedStatuses(config, issue.project);
-  const doneEvents = eventsFor(issue, 'status').filter((event) => event.timeMs >= firstEntryMs && event.timeMs <= sprint.window.endMs && isDone(event.toString, doneStatuses));
+  const statusEndCategory = statusEnd === statusName(issue.fields) ? issue.fields.status?.statusCategory?.key || '' : '';
+  const workflowScope = 'delivery';
+  const resolutionAtEnd = resolutionCompletesForProject(config, issue.project, workflowScope)
+    && Number.isFinite(Date.parse(issue.fields.resolutiondate || ''))
+    && Date.parse(issue.fields.resolutiondate) <= sprint.window.endMs;
+  const lifecycleRolesAtEnd = lifecycleRolesForStatus(config, issue.project, statusEnd, statusEndCategory, resolutionAtEnd, workflowScope);
+  const doneStatuses = configuredCompletedStatuses(config, issue.project, workflowScope);
+  const insideSprintMembership = (at) => overlapping.some(([start, end]) => start <= at && end > at);
+  const doneEvents = eventsFor(issue, 'status').filter((event) => event.timeMs >= firstEntryMs && event.timeMs <= sprint.window.endMs
+    && insideSprintMembership(event.timeMs) && isDone(event.toString, doneStatuses));
   let completionMs = doneEvents.length ? doneEvents[0].timeMs : null;
-  const resolutionMs = Date.parse(issue.fields.resolutiondate || '');
-  if (completionMs === null && Number.isFinite(resolutionMs) && resolutionMs >= firstEntryMs && resolutionMs <= sprint.window.endMs) completionMs = resolutionMs;
-  const currentStatusIsDone = statusEnd === statusName(issue.fields) && String(issue.fields.status?.statusCategory?.key || '').toLowerCase() === 'done';
-  const completed = completionMs !== null && (isDone(statusEnd, doneStatuses) || currentStatusIsDone
-    || (Number.isFinite(resolutionMs) && resolutionMs >= firstEntryMs && resolutionMs <= sprint.window.endMs));
-  const startedStatuses = new Set((config.workflows.delivery?.startedStatuses || []).map((status) => String(status).toLocaleLowerCase('en-US')));
-  const inProgressEvents = eventsFor(issue, 'status').filter((event) => startedStatuses.has(String(event.toString).toLocaleLowerCase('en-US')) && completionMs !== null && event.timeMs <= completionMs);
-  const reopenedCount = eventsFor(issue, 'status').filter((event) => event.timeMs >= sprint.window.startMs && event.timeMs <= sprint.window.endMs && isDone(event.fromString, doneStatuses) && !isDone(event.toString, doneStatuses)).length;
+  const resolutionMs = resolutionCompletesForProject(config, issue.project, workflowScope) ? Date.parse(issue.fields.resolutiondate || '') : NaN;
+  if (completionMs === null && Number.isFinite(resolutionMs) && resolutionMs >= firstEntryMs && resolutionMs <= sprint.window.endMs
+    && insideSprintMembership(resolutionMs)) completionMs = resolutionMs;
+  const currentStatusCompletesWithoutDate = atEnd && statusEnd === statusName(issue.fields)
+    && statusCategoryCompletesForProject(config, issue.project, issue.fields.status?.statusCategory?.key || '', workflowScope);
+  const completed = currentStatusCompletesWithoutDate || (completionMs !== null
+    && (isDone(statusEnd, doneStatuses) || (Number.isFinite(resolutionMs) && resolutionMs >= firstEntryMs
+      && resolutionMs <= sprint.window.endMs && insideSprintMembership(resolutionMs))));
+  const startedStatuses = lifecycleStatusesForProject(config, issue.project, 'started', workflowScope);
+  const inProgressEvents = eventsFor(issue, 'status').filter((event) => startedStatuses.has(String(event.toString).toLocaleLowerCase('en-US'))
+    && completionMs !== null && event.timeMs >= firstEntryMs && event.timeMs <= completionMs && insideSprintMembership(event.timeMs));
+  const reopenedCount = eventsFor(issue, 'status').filter((event) => event.timeMs >= sprint.window.startMs && event.timeMs <= sprint.window.endMs
+    && insideSprintMembership(event.timeMs) && isDone(event.fromString, doneStatuses) && !isDone(event.toString, doneStatuses)).length;
   const tagAtEntry = exactTagAt(issue, entryMs, config.adhocTag);
   const tagAtEnd = exactTagAt(issue, Math.min(lastExitMs, sprint.window.endMs), config.adhocTag);
   const tagDuringSprint = tagAtEntry || tagAtEnd || eventsFor(issue, 'issueTags').some((event) => event.timeMs >= entryMs && event.timeMs <= Math.min(lastExitMs, sprint.window.endMs) && exactTagAt(issue, event.timeMs, config.adhocTag));
@@ -353,6 +370,7 @@ function makeRelation(issue, sprint, interval, config) {
     workClassification,
     statusStart,
     statusEnd,
+    lifecycleRolesAtEnd,
     completed,
     completionMs: completedAt,
     incoming: false,
@@ -569,17 +587,22 @@ function buildIssueRows(rawIssues, config) {
     const fields = issue.fields || {};
     const semantic = resolveSemanticFields(issue, config);
     const currentSprintIds = Array.from(parseIds(semantic.sprint));
+    const project = String(fields.project?.key || issue.project || issue.key?.split('-')[0] || '').toUpperCase();
+    const currentStatus = String(fields.status?.name || '');
     const teamValue = jiraOptionLabel(semantic.team);
     const assignmentTime = Date.parse(fields.updated || fields.created || '') || Date.now();
     const attribution = resolveTeamAttribution(issue, {}, config, teamValue, assignmentTime);
     return {
       id: String(issue.id || ''),
       key: String(issue.key || '').toUpperCase(),
-      project: fields.project?.key || String(issue.key || '').split('-')[0],
+      project,
       summary: fields.summary || '',
       issueType: fields.issuetype?.name || 'Unknown',
-      status: statusName(fields),
+      status: currentStatus,
       statusCategory: fields.status?.statusCategory?.key || '',
+      lifecycleRoles: lifecycleRolesForStatus(config, project, currentStatus, fields.status?.statusCategory?.key || '', Boolean(fields.resolutiondate)),
+      lifecycleRolesByScope: Object.fromEntries(['delivery', 'intake', 'commitment'].map((scope) => [scope,
+        lifecycleRolesForStatus(config, project, currentStatus, fields.status?.statusCategory?.key || '', Boolean(fields.resolutiondate), scope)])),
       assigneeKey: getAssigneeKey(fields.assignee),
       assignee: fields.assignee?.displayName || fields.assignee?.name || 'تخصیص‌نیافته',
       created: fields.created || '',
@@ -612,6 +635,7 @@ function buildIssueRows(rawIssues, config) {
         return rows;
       }),
       isDone: isIssueDone(issue, config),
+      isDoneByScope: Object.fromEntries(['delivery', 'intake', 'commitment'].map((scope) => [scope, isIssueDone(issue, config, scope)])),
       issueTypeId: String(fields.issuetype?.id || ''),
       issueClass: config.issueTypeClassifications?.find((entry) => entry.issueTypeId === String(fields.issuetype?.id || ''))?.classification || 'unclassified',
       raw: issue,
@@ -632,11 +656,35 @@ function buildDataQuality(rawIssues, rawSprints, importRuns, conflicts, config =
   const knownFields = new Set([...KNOWN_FIELDS, ...(config.fieldMappings || []).map((binding) => binding.providerFieldId)]);
   const semanticFieldAliases = new Map();
   const unknownFields = new Set();
+  const unknownWorkflowStatuses = new Map();
+  const unknownWorkflowHistory = new Map();
+  const ambiguousWorkflowStatuses = new Map();
+  const trackWorkflowStatus = (target, issue, status, category = '', hasResolution = false) => {
+    const name = String(status || '').trim();
+    if (!name) return;
+    const project = String(issue.fields?.project?.key || issue.project || issue.key?.split('-')[0] || '').toUpperCase();
+    workflowScopesForProject(config, project).forEach((scope) => {
+      if (!hasLifecycleStatusMappings(config, project, scope)) return;
+      const roles = lifecycleRolesForStatus(config, project, name, category, hasResolution, scope);
+      const identity = `${scope}|${String(issue.key || issue.id || 'unknown').toUpperCase()}|${name.toLocaleLowerCase('en-US')}`;
+      if (!roles.length) target.set(identity, `${scope}: ${name}`);
+      else if (roles.length > 1) ambiguousWorkflowStatuses.set(identity, { name: `${scope}: ${name}`, roles });
+    });
+  };
   let incompleteHistories = 0;
   let issuesWithoutHistory = 0;
   let unparsableSprintValues = 0;
   rawIssues.forEach((issue) => {
     const fields = issue.fields || {};
+    const currentStatus = String(fields.status?.name || '');
+    trackWorkflowStatus(unknownWorkflowStatuses, issue, currentStatus, fields.status?.statusCategory?.key || '', Boolean(fields.resolutiondate));
+    (issue.changelog?.histories || []).forEach((history) => (history.items || []).forEach((item) => {
+      if (semanticHistoryField(item, config, issue) !== 'status') return;
+      const from = item.fromString || (typeof item.from === 'string' && !/^\d+$/.test(item.from) ? item.from : '');
+      const to = item.toString || (typeof item.to === 'string' && !/^\d+$/.test(item.to) ? item.to : '');
+      trackWorkflowStatus(unknownWorkflowHistory, issue, from);
+      trackWorkflowStatus(unknownWorkflowHistory, issue, to);
+    }));
     Object.keys(fields).forEach((key) => { if (!knownFields.has(key)) unknownFields.add(key); });
     const bindingsByFieldId = new Map();
     semanticKeys.forEach((key) => {
@@ -699,6 +747,9 @@ function buildDataQuality(rawIssues, rawSprints, importRuns, conflicts, config =
   });
   if (issuesWithoutHistory) findings.push({ severity: 'warning', code: 'HISTORY_NOT_RETURNED', count: issuesWithoutHistory, message: `${issuesWithoutHistory} issueها تاریخچهٔ تغییرات ندارند؛ محاسبهٔ تغییرات تاریخی محدود است.` });
   if (incompleteHistories) findings.push({ severity: 'warning', code: 'HISTORY_PARTIAL', count: incompleteHistories, message: `${incompleteHistories} issue تاریخچهٔ صفحه‌بندی‌نشده یا ناقص دارند.` });
+  if (unknownWorkflowStatuses.size) findings.push({ severity: 'warning', code: 'WORKFLOW_STATUS_UNMAPPED', count: unknownWorkflowStatuses.size, message: `${unknownWorkflowStatuses.size} وضعیت جاری به نقش گردش‌کار نگاشت نشده است: ${Array.from(new Set(unknownWorkflowStatuses.values())).slice(0, 8).join(', ')}.` });
+  if (unknownWorkflowHistory.size) findings.push({ severity: 'warning', code: 'WORKFLOW_HISTORY_STATUS_UNMAPPED', count: unknownWorkflowHistory.size, message: `${unknownWorkflowHistory.size} مقدار وضعیت در تاریخچه به نقش گردش‌کار نگاشت نشده است: ${Array.from(new Set(unknownWorkflowHistory.values())).slice(0, 8).join(', ')}.` });
+  if (ambiguousWorkflowStatuses.size) findings.push({ severity: 'warning', code: 'WORKFLOW_STATUS_ROLE_AMBIGUOUS', count: ambiguousWorkflowStatuses.size, message: `${ambiguousWorkflowStatuses.size} وضعیت به چند نقش گردش‌کار نگاشت شده است: ${Array.from(ambiguousWorkflowStatuses.values()).slice(0, 8).map((item) => `${item.name} (${item.roles.join('/')})`).join(', ')}.` });
   if (unparsableSprintValues) findings.push({ severity: 'warning', code: 'SPRINT_VALUE_UNPARSED', count: unparsableSprintValues, message: `${unparsableSprintValues} مقدار Sprint شناسهٔ قابل‌خواندن نداشت؛ متن خام حفظ شده است.` });
   if (unknownFields.size) findings.push({ severity: 'info', code: 'UNKNOWN_FIELDS_PRESERVED', count: unknownFields.size, message: `فیلدهای جدید حفظ شده‌اند: ${Array.from(unknownFields).slice(0, 12).join(', ')}${unknownFields.size > 12 ? '، …' : ''}` });
   if (conflicts.length) findings.push({ severity: 'warning', code: 'IMPORT_CONFLICTS', count: conflicts.length, message: `${conflicts.length} تعارض نسخه یا شناسه در import ثبت شده است.` });
@@ -1066,7 +1117,7 @@ function calculateMetrics(rawIssues, rawSprints, config, importRuns = [], confli
     return {
       ...epic,
       childrenCount: children.length,
-      childrenDone: children.filter((child) => child.isDone).length,
+      childrenDone: children.filter((child) => child.isDoneByScope.delivery).length,
       childStoryPoints: sumKnown(children, (child) => child.points),
       technicalProjects: Array.from(new Set(children.filter((child) => (config.projectRoles?.technicalDelivery || []).includes(child.project)).map((child) => child.project))),
       teamGroups: Array.from(teamGroups.values()).map((group) => ({ teamId: group.teamId, team: group.team, issueCount: group.issueKeys.size })),
@@ -1274,7 +1325,10 @@ function publicSnapshot(metrics, productRecords, importRuns, conflicts, filters 
     })).sort((a, b) => String(a.startDate).localeCompare(String(b.startDate)) || a.team.localeCompare(b.team));
     const linkedSprintNames = Array.from(new Set(linkedSprintDeliveries.map((item) => item.team + ' · ' + item.sprintName)));
     const linkedTeams = Array.from(new Set(linkedSprintDeliveries.map((item) => item.team))).sort();
-    const completedKeys = new Set([...linked.filter((issue) => issue.isDone).map((issue) => issue.key), ...linkedRelations.filter((relation) => relation.completed).map((relation) => relation.issue.key)]);
+    const completedKeys = new Set([...linked.filter((issue) => {
+      const scope = intakeProjects.has(issue.project) ? 'intake' : deliveryProjects.has(issue.project) ? 'delivery' : '';
+      return scope ? issue.isDoneByScope[scope] : issue.isDone;
+    }).map((issue) => issue.key), ...linkedRelations.filter((relation) => relation.completed).map((relation) => relation.issue.key)]);
     return {
       recordId: record.id, kind: record.kind, title: record.title, keys,
       linkedIssues: linked.map((issue) => ({ key: issue.key, project: issue.project, status: issue.status, assignee: issue.assignee, points: issue.points, epicLink: issue.epicLink })),
@@ -1328,7 +1382,7 @@ function publicSnapshot(metrics, productRecords, importRuns, conflicts, filters 
     const connections = intakeLinks.get(issue.key) || [];
     const deliveryKeys = Array.from(new Set(connections.map((link) => link.deliveryKey))).sort();
     return {
-      ...issue, done: issue.isDone, productTeam: issue.components?.length ? issue.components.join('، ') : '—',
+      ...issue, done: issue.isDoneByScope.intake, productTeam: issue.components?.length ? issue.components.join('، ') : '—',
       requester: jiraOptionLabel(issue.requester), department: jiraOptionLabel(issue.department), productOwner: jiraOptionLabel(issue.productOwner),
       statusSince, statusAgeDays, issueAgeDays, lastUpdatedAgeDays: ageInDays(issue.updated, nowMs),
       linkedTechnicalKeys: deliveryKeys, linkedTechnicalLinks: connections, linkedProducts: recordsByIntakeIssue.get(issue.key) || [],
@@ -1402,7 +1456,7 @@ function publicSnapshot(metrics, productRecords, importRuns, conflicts, filters 
   return {
     summary: { ...metrics.summary, warningCount, businessIssueCount: businessSummary.total, openBusinessIssues: businessSummary.open,
       businessIssuesWithTechnicalLinks: businessSummary.withTechnicalLinks,
-      openActions: metrics.issues.filter((issue) => commitmentProjects.has(issue.project) && !issue.isDone).length,
+      openActions: metrics.issues.filter((issue) => commitmentProjects.has(issue.project) && !issue.isDoneByScope.commitment).length,
       openRequests: activeIntakeIssues.length, decisions: records.filter((record) => record.kind === 'decision').length,
       outcomes: records.filter((record) => record.kind === 'outcome').length },
     teams: Array.from(new Set(metrics.sprintMetrics.map((metric) => metric.team))).sort((a, b) => a.localeCompare(b)),

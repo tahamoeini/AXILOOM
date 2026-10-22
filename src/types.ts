@@ -64,6 +64,7 @@ export interface Snapshot {
 
 export interface IssueListFilters {
   project?: string; issueType?: string; status?: string; priority?: string; assignee?: string;
+  workflowScope?: 'delivery' | 'intake' | 'commitment';
   epic?: string; component?: string; sprintId?: string; query?: string; createdFrom?: string; createdTo?: string;
   done?: boolean; offset?: number; limit?: number; sortBy?: 'key' | 'created' | 'updated' | 'summary' | 'status' | 'project';
   sortDirection?: 'asc' | 'desc';
@@ -149,8 +150,14 @@ export interface CapacityOverride {
   overrideWorkingDays: number | null;
   allocation: number;
 }
+export type LifecycleRole = 'backlog' | 'ready' | 'started' | 'blocked' | 'review' | 'delivered' | 'cancelled' | 'committed';
 export interface WorkflowMilestone { id: string; label: string; statuses: string[] }
-export interface WorkflowConfiguration { milestones: WorkflowMilestone[]; [key: string]: any }
+export interface WorkflowConfiguration {
+  backlogStatuses: string[]; readyStatuses: string[]; startedStatuses: string[]; blockedStatuses: string[];
+  reviewStatuses: string[]; completedStatuses: string[]; cancelledStatuses: string[]; entryStatuses?: string[];
+  completionStatusCategories: string[]; resolutionCompletes: boolean; milestones: WorkflowMilestone[];
+  [key: string]: any;
+}
 
 export interface StakeholderContactPoint {
   id: string;

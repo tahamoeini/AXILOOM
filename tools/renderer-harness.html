@@ -18,8 +18,8 @@
           workspaceName: 'Renderer smoke workspace',
           sourceInstance: { id: 'synthetic-source', provider: 'offline-json', displayName: 'Synthetic fixture', endpoint: '', networkAccess: { mode: 'private', approvedAddresses: [] } },
           jiraUrl: '',
-          projects: [],
-          projectRoles: { productIntake: [], technicalDelivery: [], commitments: [] },
+          projects: ['ALPHA'],
+          projectRoles: { productIntake: ['ALPHA'], technicalDelivery: [], commitments: ['ALPHA'] },
           teams: [],
           boardRoutes: [],
           teamAssignments: { projects: [], components: [], issueOverrides: [] },
@@ -28,17 +28,17 @@
           issueTypeClassifications: [],
           workflows: {
             delivery: { completedStatuses: [], startedStatuses: [], blockedStatuses: [], cancelledStatuses: [], milestones: [] },
-            intake: { completedStatuses: [], milestones: [] },
-            commitment: { entryStatuses: [], completedStatuses: [], milestones: [] },
+            intake: { startedStatuses: ['In Progress'], completedStatuses: ['Accepted'], completionStatusCategories: [], resolutionCompletes: false, milestones: [] },
+            commitment: { entryStatuses: ['Committed'], completedStatuses: ['Resolved'], completionStatusCategories: ['resolved'], resolutionCompletes: false, milestones: [] },
           },
           calendar: { configured: false, timeZone: 'UTC', workingDays: [], hoursPerDay: 8, holidays: [], workIntervals: [] },
           modules: {
             delivery: false,
-            portfolio: false,
+            portfolio: true,
             objectives: true,
             productIntelligence: true,
-            productIntake: false,
-            commitments: false,
+            productIntake: true,
+            commitments: true,
             businessSprint: false,
             outcomes: true,
             organizationAnalytics: false,
@@ -70,7 +70,29 @@
           quality: { findings: [], fieldCoverage: {}, unknownFields: [], incompleteHistories: 0, issuesWithoutHistory: 0, conflicts: 0, evidence: { issueRevisions: 0, issueHistoryEvents: 0, sprintRevisions: 0, localLinkEvents: 0 } },
           importRuns: [],
         };
-        const smoke = { config, snapshot, importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };
+        const syntheticIssue = {
+          id: 'synthetic-issue-101', key: 'ALPHA-101', project: 'ALPHA', summary: 'Synthetic workflow issue',
+          issueType: 'Story', components: ['Research'], assigneeKey: 'synthetic-owner', assignee: 'Synthetic Owner',
+          requester: '', department: '', status: 'In Progress', lifecycleRoles: ['started'], priority: 'Medium',
+          created: '2026-02-01T00:00:00.000Z', updated: '2026-02-02T00:00:00.000Z', issueLinks: [],
+          points: 5, epicLink: '', currentSprintIds: [], isDone: false,
+        };
+        snapshot.summary.issueCount = 1;
+        snapshot.summary.projectCounts = [{ project: 'ALPHA', count: 1 }];
+        snapshot.summary.lastIssueUpdate = syntheticIssue.updated;
+        snapshot.projects = ['ALPHA'];
+        snapshot.issues = [syntheticIssue];
+        snapshot.issueTotal = 1;
+        const smoke = { config, snapshot, syntheticIssue, issueExports: [], issueListRequests: [], importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };
+        const rememberIssueExport = (format, report) => {
+          const rows = report?.sheets?.[0]?.rows || [];
+          const workflowScope = smoke.issueListRequests.at(-1)?.workflowScope || '';
+          const evidence = { format, workflowScope, lifecycleRoleHeader: rows[0]?.[6] || '', lifecycleRoleValue: rows[1]?.[6] || '' };
+          smoke.issueExports.push({ format, report });
+          document.body.dataset.lastIssueExport = JSON.stringify(evidence);
+          document.title = `Axiloom renderer smoke · ${workflowScope || 'combined'} export ${format}`;
+          return { ok: true };
+        };
         window.__AXILOOM_SMOKE__ = smoke;
         window.confirm = (message) => { smoke.confirmations.push(String(message)); return true; };
         window.axiloom = {
@@ -143,13 +165,35 @@
           },
           exportConfigProfile: async () => { smoke.exportCalls += 1; return { canceled: false, filePath: 'synthetic-fixture-profile.json' }; },
           getCurrentUser: async () => null,
-          getIssueOverviewStats: async () => ({ issueCount: 0, openCount: 0, epicLinkedCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: null, projectCounts: [] }),
-          listIssues: async () => ({ issues: [], total: 0 }),
+          getIssueOverviewStats: async () => ({ issueCount: 1, openCount: 1, epicLinkedCount: 0, issuesWithoutAssignee: 0, lastIssueUpdate: syntheticIssue.updated, projectCounts: [{ project: 'ALPHA', count: 1 }] }),
+          listIssues: async ({ project, workflowScope = '', offset = 0, limit = 50 } = {}) => {
+            smoke.issueListRequests.push({ project: project || '', workflowScope });
+            document.body.dataset.lastIssueWorkflowScope = workflowScope;
+            document.title = `Axiloom renderer smoke · ${workflowScope || 'combined'}`;
+            const scopes = workflowScope ? [workflowScope] : Object.entries(config.projectRoles).filter(([, projects]) => projects.includes(project)).map(([role]) => ({
+              productIntake: 'intake', technicalDelivery: 'delivery', commitments: 'commitment',
+            })[role]).filter(Boolean);
+            const lifecycleFields = { backlogStatuses: 'backlog', readyStatuses: 'ready', startedStatuses: 'started', blockedStatuses: 'blocked', reviewStatuses: 'review', completedStatuses: 'delivered', cancelledStatuses: 'cancelled', entryStatuses: 'committed' };
+            const rows = (!project || project === 'ALPHA') ? [syntheticIssue].map((issue) => {
+              const roles = new Set(); let isDone = false;
+              scopes.forEach((scope) => {
+                const workflow = config.workflows?.[scope] || {};
+                Object.entries(lifecycleFields).forEach(([field, role]) => {
+                  if ((workflow[field] || []).some((status) => String(status).toLocaleLowerCase('en-US') === String(issue.status).toLocaleLowerCase('en-US'))) roles.add(role);
+                });
+                if ((workflow.completedStatuses || []).some((status) => String(status).toLocaleLowerCase('en-US') === String(issue.status).toLocaleLowerCase('en-US'))) isDone = true;
+              });
+              return { ...issue, isDone, lifecycleRoles: ['backlog', 'ready', 'started', 'blocked', 'review', 'delivered', 'cancelled', 'committed'].filter((role) => roles.has(role)) };
+            }) : [];
+            return { items: rows.slice(offset, offset + limit), total: rows.length, doneCount: rows.filter((issue) => issue.isDone).length,
+              openCount: rows.filter((issue) => !issue.isDone).length, withoutAssignee: 0, withEpicLink: 0,
+              offset, limit, hasMore: offset + limit < rows.length };
+          },
           getCalendarPeriodReport: async () => ({ created: 0, completed: 0, completedWithoutResolution: 0, previousCreated: null, previousCompleted: null, monthly: [] }),
           getBusinessBoardReport: async () => ({ summary: {}, issues: [], total: 0 }),
           getBusinessSprints: async () => [],
           getBusinessSprintReport: async () => ({ summary: {}, issues: [] }),
-          getIssueFilterOptions: async () => ({ statuses: [], priorities: [], assignees: [], components: [] }),
+          getIssueFilterOptions: async () => ({ projects: ['ALPHA'], issueTypes: ['Story'], statuses: ['In Progress'], priorities: ['Medium'], assignees: ['Synthetic Owner'], components: ['Research'], epics: [] }),
           onImportProgress: () => () => {},
           onJiraProgress: (callback) => { smoke.jiraProgressHandler = callback; return () => { smoke.jiraProgressHandler = null; }; },
           saveRecord: async ({ id, kind, title, payload }) => {
@@ -159,8 +203,8 @@
             return record;
           },
           archiveRecord: async (id) => { snapshot.records = snapshot.records.filter((record) => record.id !== id); },
-          exportXlsx: async () => ({ ok: true }),
-          exportPdf: async () => ({ ok: true }),
+          exportXlsx: async (report) => rememberIssueExport('xlsx', report),
+          exportPdf: async (report) => rememberIssueExport('pdf', report),
         };
       })();
     </script>

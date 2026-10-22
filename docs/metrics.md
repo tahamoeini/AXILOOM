@@ -8,7 +8,7 @@ Semantic field coverage follows the project/type binding selected for each issue
 ## Sprint boundaries and scope
 
 - Actual sprint windows use activation and completion timestamps when present. Active sprint windows are bounded by the present or configured sprint end. Planned start/end dates are used for capacity.
-- Completion includes Jira's `statusCategory=done`, a resolution date, or a completion status explicitly configured for the issue's project role.
+- Completion is evaluated independently for delivery, intake, and commitment. Each role uses its configured completed statuses, selected Jira status categories, and optional resolution-date rule. An unscoped overview combines policies for roles assigned to the project; role-specific lists and metrics use only that role's policy. Category-only completion has no event timestamp, so cycle and lead-time calculations remain unavailable unless an exact status or dated resolution transition supplies one.
 - Point-in-time field values are reconstructed from available changelog events. Incomplete history is flagged; reconstructed values are not presented as certain when evidence is missing.
 - Work classifications and tags are selected through configured mappings. Missing classifications remain unknown. Jira's Epic relationship, Jira issue links, and local product-record relationships are separate.
 

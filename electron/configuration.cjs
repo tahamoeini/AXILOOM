@@ -27,9 +27,18 @@ const DEFAULT_CONFIG = Object.freeze({
   workClassifications: [],
   issueTypeClassifications: [],
   workflows: {
-    delivery: { completedStatuses: [], startedStatuses: [], blockedStatuses: [], cancelledStatuses: [], milestones: [] },
-    intake: { completedStatuses: [], milestones: [] },
-    commitment: { entryStatuses: [], completedStatuses: [], milestones: [] },
+    delivery: {
+      backlogStatuses: [], readyStatuses: [], startedStatuses: [], blockedStatuses: [], reviewStatuses: [],
+      completedStatuses: [], cancelledStatuses: [], completionStatusCategories: ['done'], resolutionCompletes: true, milestones: [],
+    },
+    intake: {
+      backlogStatuses: [], readyStatuses: [], startedStatuses: [], blockedStatuses: [], reviewStatuses: [],
+      completedStatuses: [], cancelledStatuses: [], completionStatusCategories: ['done'], resolutionCompletes: true, milestones: [],
+    },
+    commitment: {
+      backlogStatuses: [], readyStatuses: [], startedStatuses: [], blockedStatuses: [], reviewStatuses: [],
+      entryStatuses: [], completedStatuses: [], cancelledStatuses: [], completionStatusCategories: ['done'], resolutionCompletes: true, milestones: [],
+    },
   },
   calendar: { configured: false, timeZone: 'UTC', workingDays: [], hoursPerDay: 8, holidays: [], workIntervals: [] },
   modules: {
@@ -148,13 +157,19 @@ function normalizeConfig(input = {}) {
   const workflowsInput = isRecord(input.workflows) ? input.workflows : {};
   const workflows = {};
   for (const scope of Object.keys(defaults.workflows)) {
+    if (isRecord(workflowsInput[scope]) && Object.hasOwn(workflowsInput[scope], 'resolutionCompletes')
+      && typeof workflowsInput[scope].resolutionCompletes !== 'boolean') {
+      throw new Error(`Workflow resolution policy in ${scope} must be boolean.`);
+    }
     workflows[scope] = { ...defaults.workflows[scope], ...(isRecord(workflowsInput[scope]) ? workflowsInput[scope] : {}) };
     for (const key of Object.keys(workflows[scope])) {
       workflows[scope][key] = key === 'milestones'
         ? Array.isArray(workflows[scope][key]) ? workflows[scope][key].filter(isRecord).map((milestone) => ({
           id: asString(milestone.id, 80), label: asString(milestone.label, 160), statuses: stringList(milestone.statuses, 160),
         })) : []
-        : stringList(workflows[scope][key], 160);
+        : key === 'resolutionCompletes'
+          ? typeof workflows[scope][key] === 'boolean' ? workflows[scope][key] : true
+          : stringList(workflows[scope][key], 160);
     }
   }
   if (legacy && !workflowsInput.delivery && Array.isArray(input.doneStatuses)) {
@@ -410,6 +425,10 @@ function validateConfig(input) {
 
   for (const [scope, workflow] of Object.entries(config.workflows)) {
     for (const key of Object.keys(workflow).filter((name) => name !== 'milestones')) {
+      if (key === 'resolutionCompletes') {
+        assert(typeof workflow[key] === 'boolean', `Workflow resolution policy in ${scope} must be boolean.`);
+        continue;
+      }
       workflow[key].forEach((status) => assert(status.length <= 160, `Workflow status in ${scope} is too long.`));
     }
     assert(Array.isArray(workflow.milestones), `Workflow milestones for ${scope} must be a list.`);

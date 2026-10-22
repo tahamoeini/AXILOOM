@@ -1,5 +1,8 @@
 const { getConfig } = require('./database.cjs');
-const { resolveSemanticFields, semanticHistoryField } = require('./semantic-mapping.cjs');
+const {
+  resolveSemanticFields, semanticHistoryField, configuredCompletedStatuses,
+  lifecycleStatusesForProject, resolutionCompletesForProject, statusCategoryCompletesForProject,
+} = require('./semantic-mapping.cjs');
 const { resolveBoardTeam, resolveTeamAttribution } = require('./team-attribution.cjs');
 
 function safeJson(value, fallback = null) {
@@ -123,19 +126,21 @@ function makeIssueState(issue, sprintId, boundary, config) {
   const overlaps = intervals.filter(([start, end]) => end > boundary.startMs && start < boundary.endMs);
   if (!overlaps.length) return null;
   const insideAt = (at) => overlaps.some(([start, end]) => start <= at && end > at);
+  const atEnd = overlaps.some(([start, end]) => start < boundary.endMs && end >= boundary.endMs);
   const statusAt = (at) => String(valueAt(fields.status?.name || '', events, 'status', at, (value) => String(value || '')) || '');
   const pointsAt = (at) => numberOrNull(valueAt(semantic.storyPoints, events, 'storyPoints', at, numberOrNull));
-  const entryStatuses = new Set((config.workflows.commitment.entryStatuses || []).map(normalize));
-  const completedStatuses = new Set((config.workflows.commitment.completedStatuses || []).map(normalize));
+  const entryStatuses = new Set([...lifecycleStatusesForProject(config, fields.project?.key || issue.key?.split('-')[0], 'committed', 'commitment')].map(normalize));
+  const completedStatuses = configuredCompletedStatuses(config, fields.project?.key || issue.key?.split('-')[0], 'commitment');
   const milestones = config.workflows.commitment.milestones || [];
   const startStatus = statusAt(boundary.startMs);
   const endStatus = statusAt(boundary.endMs);
   const committed = insideAt(boundary.startMs) && entryStatuses.has(normalize(startStatus));
   const milestoneAt = Object.fromEntries(milestones.map((milestone) => [milestone.id, null]));
   const transitions = events.filter((event) => event.field === 'status' && event.timeMs >= boundary.startMs && event.timeMs <= boundary.endMs);
-  const entries = transitions.filter((event) => !entryStatuses.has(normalize(event.from)) && entryStatuses.has(normalize(event.to)));
-  const exits = transitions.filter((event) => entryStatuses.has(normalize(event.from)) && !entryStatuses.has(normalize(event.to)));
+  const entries = transitions.filter((event) => insideAt(event.timeMs) && !entryStatuses.has(normalize(event.from)) && entryStatuses.has(normalize(event.to)));
+  const exits = transitions.filter((event) => insideAt(event.timeMs) && entryStatuses.has(normalize(event.from)) && !entryStatuses.has(normalize(event.to)));
   transitions.forEach((event) => {
+    if (!insideAt(event.timeMs)) return;
     const milestone = milestones.find((item) => item.statuses.some((status) => normalize(status) === normalize(event.to)));
     if (milestone && !milestoneAt[milestone.id]) milestoneAt[milestone.id] = { at: new Date(event.timeMs).toISOString(), status: String(event.to || ''), storyPoints: pointsAt(event.timeMs) };
   });
@@ -163,8 +168,13 @@ function makeIssueState(issue, sprintId, boundary, config) {
   const boundaryHistoryComplete = issue.changelog?.historyComplete === undefined
     ? Number.isFinite(Number(issue.changelog?.total)) && Number(issue.changelog.total) <= (issue.changelog?.histories?.length || 0) + Number(issue.changelog?.startAt || 0)
     : Boolean(issue.changelog.historyComplete);
-  const statusCompletion = transitions.find((event) => completedStatuses.has(normalize(event.to)));
-  const completedInSprint = Boolean(statusCompletion || milestones.some((milestone) => milestoneAt[milestone.id]));
+  const statusCompletion = transitions.find((event) => insideAt(event.timeMs) && completedStatuses.has(normalize(event.to)));
+  const resolutionMs = resolutionCompletesForProject(config, fields.project?.key || issue.key?.split('-')[0], 'commitment') ? Date.parse(fields.resolutiondate || '') : NaN;
+  const resolutionCompletion = Number.isFinite(resolutionMs) && resolutionMs >= boundary.startMs && resolutionMs <= boundary.endMs && insideAt(resolutionMs);
+  const completionCategoryAtEnd = atEnd
+    && endStatus === String(fields.status?.name || '')
+    && statusCategoryCompletesForProject(config, fields.project?.key || issue.key?.split('-')[0], fields.status?.statusCategory?.key || '', 'commitment');
+  const completedInSprint = Boolean(statusCompletion || resolutionCompletion || completionCategoryAtEnd || milestones.some((milestone) => milestoneAt[milestone.id]));
   return {
     key: String(issue.key || '').toUpperCase(), summary: String(fields.summary || ''), project: String(fields.project?.key || ''),
     team, teamId: attribution.teamId, teamPath: attribution.teamPath, teamSource, teamValue,
@@ -174,7 +184,7 @@ function makeIssueState(issue, sprintId, boundary, config) {
     committed, addedDuring, addedPoints: addedDuring ? pointsAt(entries[0]?.timeMs || boundary.endMs) : null,
     inScopeAtEnd: insideAt(boundary.endMs) && entryStatuses.has(normalize(endStatus)),
     exitStatus: exits[0] ? String(exits[0].to || '') : '', completedInSprint,
-    completedPoints: statusCompletion ? pointsAt(statusCompletion.timeMs) : completedInSprint ? pointsAt(boundary.endMs) : null,
+    completedPoints: statusCompletion ? pointsAt(statusCompletion.timeMs) : resolutionCompletion ? pointsAt(resolutionMs) : completedInSprint ? pointsAt(boundary.endMs) : null,
     milestoneAt, milestonePoints: Object.fromEntries(Object.entries(milestoneAt).map(([key, value]) => [key, value?.storyPoints ?? null])),
     transitions: transitions.map((event) => ({ fromStatus: String(event.from || ''), toStatus: String(event.to || ''), at: new Date(event.timeMs).toISOString() })),
     linkedIssueKeys: Array.from(new Set(issueLinks)), historyComplete: boundaryHistoryComplete,

@@ -86,7 +86,11 @@ async function main() {
       { semanticKey: 'epicLink', providerFieldId: 'customfield_7302', projectKey: 'BUILD', transform: 'text' },
       { semanticKey: 'sprint', providerFieldId: 'customfield_7303', projectKey: 'BUILD', transform: 'id-list' },
     ],
-    workflows: { intake: { completedStatuses: ['Accepted'] }, delivery: { completedStatuses: ['Shipped'] }, commitment: { completedStatuses: ['Resolved'] } },
+    workflows: {
+      intake: { startedStatuses: ['In Progress'], completedStatuses: ['Accepted'] },
+      delivery: { startedStatuses: ['In Progress'], completedStatuses: ['Shipped'], completionStatusCategories: ['closed'], resolutionCompletes: false },
+      commitment: { completedStatuses: ['Resolved'] },
+    },
     modules: { productIntake: true },
   });
   assert.deepEqual(config.projectRoles.productIntake, ['REQUEST']);
@@ -100,6 +104,8 @@ async function main() {
   cloudAssignedIssue.fields.assignee = { accountId: 'account-123', displayName: 'Cloud User' };
   saveIssue(db, cloudAssignedIssue);
   saveIssue(db, issue(7, 'BUILD-2', 'BUILD', 'Shipped', 'Delivery completion', [], 'bob', 'indeterminate'));
+  saveIssue(db, issue(8, 'BUILD-3', 'BUILD', 'Closed', 'Category completion', [], 'bob', 'closed'));
+  saveIssue(db, issue(9, 'BUILD-4', 'BUILD', 'Done', 'Ignored completion signals', [], 'bob', 'done', '2026-01-03T00:00:00.000Z'));
   saveLocalIssueLink(db, { intakeIssueKey: 'REQUEST-1', deliveryIssueKey: 'BUILD-1', relationship: 'implements', note: 'fixture' });
   db.prepare('INSERT INTO product_records(id,kind,title,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)')
     .run('record-1', 'decision', 'Delivery review', JSON.stringify({ primaryIssueKey: 'REQUEST-1' }), now, now);
@@ -122,7 +128,16 @@ async function main() {
   assert.equal(listIssues(db, { project: 'REQUEST', assignee: 'account-123', limit: 10 }).items[0].assigneeKey, 'account-123');
   assert.deepEqual(listIssues(db, { project: 'REQUEST', assignee: 'unassigned', limit: 10 }).items.map((item) => item.key), ['REQUEST-2']);
   assert.equal(getIssueOverviewStats(db).issuesWithoutAssignee, 1);
-  assert.equal(listIssues(db, { project: 'BUILD', done: true, limit: 50 }).total, 2, 'the configured delivery completion status is respected');
+  const completedDelivery = listIssues(db, { project: 'BUILD', done: true, limit: 50 });
+  const openDelivery = listIssues(db, { project: 'BUILD', done: false, limit: 50 });
+  assert.equal(completedDelivery.total, 3, 'configured delivery status labels and status categories count as complete');
+  assert.ok(completedDelivery.items.find((item) => item.key === 'BUILD-3').lifecycleRoles.includes('delivered'));
+  assert.equal(openDelivery.total, 1, 'disabled category and resolution rules do not count as complete');
+  assert.equal(openDelivery.items[0].key, 'BUILD-4');
+  assert.ok(listIssues(db, { project: 'REQUEST', limit: 50 }).items.find((item) => item.key === 'REQUEST-1').lifecycleRoles.includes('started'));
+  const allIssueRows = listIssues(db, { limit: 50 });
+  assert.equal(allIssueRows.doneCount, allIssueRows.items.filter((item) => item.isDone).length, 'list aggregates use the same completion policy as projected issue rows');
+  assert.equal(getIssueOverviewStats(db).openCount, allIssueRows.openCount, 'overview and list open counts share the workflow policy');
   const activity = getIssueActivity(db, 'REQUEST-1', 0, 1);
   assert.equal(activity.history.available, 2); assert.equal(activity.history.histories.length, 1); assert.equal(activity.history.hasMore, true);
   db.close();
@@ -145,6 +160,11 @@ async function main() {
   const rawIssues = db.prepare('SELECT raw_json FROM jira_issues ORDER BY issue_key').all().map((row) => JSON.parse(row.raw_json));
   const sprints = db.prepare('SELECT raw_json FROM jira_sprints ORDER BY start_date').all().map((row) => JSON.parse(row.raw_json));
   const directMetrics = calculateMetrics(rawIssues, sprints, getConfig(db));
+  const metricDoneKeys = directMetrics.issues.filter((item) => item.isDone).map((item) => item.key).sort();
+  assert.deepEqual(allIssueRows.items.filter((item) => item.isDone).map((item) => item.key).sort(), metricDoneKeys,
+    'the SQL issue-list filter and calculated metrics apply identical workflow completion rules');
+  assert.ok(directMetrics.quality.findings.some((finding) => finding.code === 'WORKFLOW_STATUS_UNMAPPED'), 'unmapped current workflow labels are visible in data quality');
+  assert.ok(directMetrics.quality.findings.some((finding) => finding.code === 'WORKFLOW_HISTORY_STATUS_UNMAPPED'), 'unmapped historical workflow labels are visible in data quality');
   const engineHash = createHash('sha256').update(fs.readFileSync(path.join(root, 'electron/snapshot.cjs')))
     .update(fs.readFileSync(path.join(root, 'electron/metrics.cjs')))
     .update(fs.readFileSync(path.join(root, 'electron/semantic-mapping.cjs')))
@@ -219,6 +239,54 @@ async function main() {
   assert.equal(getCalendarPeriodReport(alternateDb, { projects: ['IDEAS'], from: '2026-02-01', to: '2026-02-28' }).completed, 1,
     'a second profile applies its own intake workflow');
   alternateDb.close();
+
+  const overlappingPath = path.join(temporaryDirectory, 'overlapping-workflow-profile.sqlite');
+  const overlappingDb = openDatabase(overlappingPath);
+  const overlappingConfig = saveConfig(overlappingDb, {
+    schemaVersion: 1, organization: { name: 'Overlapping Workflow Sample', locale: 'en-US', timeZone: 'UTC' },
+    projects: ['MULTI'],
+    projectRoles: { productIntake: ['MULTI'], technicalDelivery: ['MULTI'], commitments: ['MULTI'] },
+    workflows: {
+      intake: { startedStatuses: ['Triaged'], completedStatuses: ['Accepted'], completionStatusCategories: [], resolutionCompletes: false },
+      delivery: { startedStatuses: ['Building'], completedStatuses: ['Shipped'], completionStatusCategories: ['closed'], resolutionCompletes: false },
+      commitment: { completedStatuses: ['Approved'], completionStatusCategories: ['resolved'], resolutionCompletes: false },
+    },
+    modules: { productIntake: true, delivery: false, businessSprint: false },
+  });
+  saveIssue(overlappingDb, issue(51, 'MULTI-1', 'MULTI', 'Accepted', 'Intake completion', [], 'person-1'));
+  saveIssue(overlappingDb, issue(52, 'MULTI-2', 'MULTI', 'Shipped', 'Delivery completion', [], 'person-1'));
+  saveIssue(overlappingDb, issue(53, 'MULTI-3', 'MULTI', 'Done', 'Delivery category completion', [], 'person-1', 'closed'));
+  saveIssue(overlappingDb, issue(54, 'MULTI-4', 'MULTI', 'Approved', 'Commitment completion', [], 'person-1'));
+  saveIssue(overlappingDb, issue(55, 'MULTI-5', 'MULTI', 'Done', 'Commitment category completion', [], 'person-1', 'resolved'));
+  saveIssue(overlappingDb, issue(56, 'MULTI-6', 'MULTI', 'Done', 'Resolution excluded by each policy', [], 'person-1', 'indeterminate', '2026-01-03T00:00:00.000Z'));
+  saveIssue(overlappingDb, issue(57, 'MULTI-7', 'MULTI', 'Triaged', 'Intake lifecycle only', [], 'person-1'));
+  const expectedDoneByScope = {
+    intake: ['MULTI-1'],
+    delivery: ['MULTI-2', 'MULTI-3'],
+    commitment: ['MULTI-4', 'MULTI-5'],
+  };
+  Object.entries(expectedDoneByScope).forEach(([scope, expectedKeys]) => {
+    const complete = listIssues(overlappingDb, { project: 'MULTI', workflowScope: scope, done: true, limit: 50 });
+    const all = listIssues(overlappingDb, { project: 'MULTI', workflowScope: scope, limit: 50 });
+    assert.deepEqual(complete.items.map((row) => row.key).sort(), expectedKeys,
+      `${scope} SQL completion filters apply only that role's statuses, categories, and resolution policy`);
+    assert.equal(complete.doneCount, expectedKeys.length, `${scope} aggregate count matches its SQL completion filter`);
+    assert.equal(all.doneCount, expectedKeys.length, `${scope} unfiltered aggregate uses the same scoped policy`);
+    assert.deepEqual(all.items.filter((row) => row.isDone).map((row) => row.key).sort(), expectedKeys,
+      `${scope} projected issue completion agrees with the SQL aggregate`);
+  });
+  const intakeLifecycle = listIssues(overlappingDb, { project: 'MULTI', workflowScope: 'intake', status: 'Triaged', limit: 5 });
+  const deliveryLifecycle = listIssues(overlappingDb, { project: 'MULTI', workflowScope: 'delivery', status: 'Triaged', limit: 5 });
+  assert.deepEqual(intakeLifecycle.items[0].lifecycleRoles, ['started']);
+  assert.deepEqual(deliveryLifecycle.items[0].lifecycleRoles, [], 'role-specific lifecycle labels do not leak across workflows');
+  const overlappingRows = overlappingDb.prepare('SELECT raw_json FROM jira_issues ORDER BY issue_key').all().map((row) => JSON.parse(row.raw_json));
+  const overlappingMetrics = calculateMetrics(overlappingRows, [], overlappingConfig);
+  const multiAccepted = overlappingMetrics.issues.find((row) => row.key === 'MULTI-1');
+  assert.deepEqual(multiAccepted.isDoneByScope, { delivery: false, intake: true, commitment: false });
+  const overlappingSnapshot = publicSnapshot(overlappingMetrics, [], [], [], {}, [], overlappingConfig);
+  assert.equal(overlappingSnapshot.summary.openRequests, 6, 'intake summary uses intake completion even for a project assigned to three roles');
+  assert.equal(overlappingSnapshot.summary.openActions, 5, 'commitment summary uses commitment completion on the same project');
+  overlappingDb.close();
 
   const teamConflictConfig = {
     ...alternateConfig,
@@ -348,14 +416,18 @@ async function main() {
 
   const businessDb = openDatabase(path.join(temporaryDirectory, 'project-attributed-business.sqlite'));
   saveConfig(businessDb, {
-    projects: ['PLAN'], projectRoles: { commitments: ['PLAN'] },
+    projects: ['PLAN'], projectRoles: { productIntake: ['PLAN'], technicalDelivery: ['PLAN'], commitments: ['PLAN'] },
     teams: [{ id: 'team-plan', name: 'Plan Team', parentTeamId: '', aliases: [], activeFrom: '', activeTo: '' }],
     teamAssignments: { projects: [{ projectKey: 'PLAN', teamId: 'team-plan', activeFrom: '', activeTo: '' }], components: [], issueOverrides: [] },
     fieldMappings: [
       { semanticKey: 'storyPoints', providerFieldId: 'customfield_points', projectKey: 'PLAN', transform: 'number' },
       { semanticKey: 'sprint', providerFieldId: 'customfield_sprints', projectKey: 'PLAN', transform: 'id-list' },
     ],
-    workflows: { commitment: { entryStatuses: ['Committed'], completedStatuses: ['Finished'], milestones: [] } },
+    workflows: {
+      intake: { completedStatuses: ['Accepted'], completionStatusCategories: [], resolutionCompletes: false },
+      delivery: { completedStatuses: [], completionStatusCategories: ['closed'], resolutionCompletes: false },
+      commitment: { entryStatuses: ['Committed'], completedStatuses: ['Finished'], completionStatusCategories: ['done'], resolutionCompletes: false, milestones: [] },
+    },
     modules: { commitments: true, businessSprint: true },
   });
   saveSprint(businessDb, {
@@ -368,9 +440,31 @@ async function main() {
   committedIssue.fields.customfield_sprints = ['301'];
   committedIssue.changelog = { startAt: 0, total: 0, histories: [] };
   saveIssue(businessDb, committedIssue, 'synthetic-fixture.json', null);
+  const categoryCompletedIssue = alternateProfileIssue(48, 'PLAN-2', 'PLAN', 'Done', 5, '', '', 'Feature', null);
+  categoryCompletedIssue.fields.status.statusCategory.key = 'done';
+  categoryCompletedIssue.fields.customfield_sprints = ['301'];
+  categoryCompletedIssue.changelog = { startAt: 0, total: 1, histories: [{ id: 'plan-done', created: '2026-02-08T12:00:00.000Z', items: [{ field: 'status', fromString: 'Committed', toString: 'Done' }] }] };
+  saveIssue(businessDb, categoryCompletedIssue, 'synthetic-fixture.json', null);
+  const deliveryCategoryIssue = alternateProfileIssue(49, 'PLAN-3', 'PLAN', 'Done', 3, '', '', 'Feature', null);
+  deliveryCategoryIssue.fields.status.statusCategory.key = 'closed';
+  deliveryCategoryIssue.fields.customfield_sprints = ['301'];
+  deliveryCategoryIssue.changelog = { startAt: 0, total: 1, histories: [{ id: 'plan-closed', created: '2026-02-09T12:00:00.000Z', items: [{ field: 'status', fromString: 'Committed', toString: 'Done' }] }] };
+  saveIssue(businessDb, deliveryCategoryIssue, 'synthetic-fixture.json', null);
   assert.equal(listBusinessSprints(businessDb).find((sprint) => sprint.id === '301')?.teamRoute, '', 'business sprint discovery includes valid sprints with no board route');
   const businessReport = getBusinessSprintReport(businessDb, { sprintId: '301' });
-  assert.equal(businessReport.teams.find((team) => team.teamId === 'team-plan')?.committedCount, 1, 'business sprint totals use the same project default and stable team ID');
+  const planTeamReport = businessReport.teams.find((team) => team.teamId === 'team-plan');
+  assert.equal(planTeamReport?.committedCount, 3, 'business sprint totals use the same project default and stable team ID');
+  assert.equal(planTeamReport?.completedCount, 1, 'a configured completion category counts a currently committed issue without inventing a transition timestamp');
+  assert.equal(businessReport.items.find((item) => item.key === 'PLAN-2')?.completedInSprint, true);
+  assert.equal(businessReport.items.find((item) => item.key === 'PLAN-3')?.completedInSprint, false,
+    'delivery-only category completion does not complete a commitment sprint item');
+  const planIssues = businessDb.prepare('SELECT raw_json FROM jira_issues ORDER BY issue_key').all().map((row) => JSON.parse(row.raw_json));
+  const planSprint = JSON.parse(businessDb.prepare('SELECT raw_json FROM jira_sprints WHERE sprint_id=?').get('301').raw_json);
+  const planDeliveryRelations = calculateMetrics(planIssues, [planSprint], getConfig(businessDb)).relations;
+  assert.equal(planDeliveryRelations.find((relation) => relation.issue.key === 'PLAN-2')?.completed, false,
+    'commitment-only category completion does not complete a delivery sprint relation');
+  assert.equal(planDeliveryRelations.find((relation) => relation.issue.key === 'PLAN-3')?.completed, true,
+    'delivery completion uses the delivery category configured for a multi-role project');
   assert.equal(businessReport.unmapped.count, 0);
   businessDb.close();
 }
