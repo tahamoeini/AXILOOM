@@ -69,6 +69,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
   if (!draft) return <div className="loading-screen">Loading workspace configuration…</div>;
 
   const update = <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => setDraft((current) => current ? { ...current, [key]: value } : current);
+  const updateSourceName = (displayName: string) => update('sourceInstance', { ...draft.sourceInstance, displayName });
   const updateRole = (role: string, projectKey: string, selected: boolean) => {
     const next = { ...draft.projectRoles };
     const current = next[role] || [];
@@ -223,6 +224,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     <section className="panel settings-panel">
       <SectionHeading title="Source connection" hint="Automatic sync is read-only. Issue mutations still require an explicit action and live Jira permission checks." />
       <div className="callout info"><LockKeyhole size={16} /><span>Supported here: HTTPS Jira Data Center with a personal access token, and offline Jira JSON imports. Jira Cloud OAuth is not implemented or claimed by this build.</span></div>
+      <label className="form-field full"><span>Source name</span><input value={draft.sourceInstance.displayName} onChange={(event) => updateSourceName(event.target.value)} maxLength={160} placeholder="Jira instance or export name" /><small>Each workspace holds one Jira source. Confirm this name before importing; create a separate workspace for another source.</small></label>
       <label className="form-field full"><span>Jira base URL</span><input value={draft.jiraUrl} onChange={(event) => update('jiraUrl', event.target.value)} placeholder="https://jira.example.org" dir="ltr" autoComplete="url" /><small>Use HTTPS. Credentials, query strings and fragments are rejected.</small></label>
       <div className="connection-row"><span className={`connection-dot ${connection?.ok ? 'connected' : connection?.ok === false ? 'failed' : ''}`} /><b>{connection?.ok ? `Connected${connection.displayName ? ` · ${connection.displayName}` : ''}` : connection?.ok === false ? 'Connection failed' : draft.sourceInstance.displayName || 'Not verified'}</b>
         <button className="button secondary" onClick={refreshMetadata} disabled={!draft.jiraUrl || working === 'metadata'}><RefreshCw size={14} /> Discover projects and fields</button>
@@ -231,7 +233,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
       {catalog && <p className="field-hint">{catalog.projects?.value.length || 0} projects · {catalog.fields?.value.length || 0} fields · {catalog.issueTypes?.value.length || 0} issue types</p>}
       <div className="auth-row"><label className="form-field"><span>Personal access token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Token is never included in the profile" autoComplete="new-password" /></label><label className="check-row"><input type="checkbox" checked={saveToken} onChange={(event) => setSaveToken(event.target.checked)} /><span>Encrypt with OS credential storage</span></label><button className="button secondary" onClick={connect} disabled={!token || working === 'connection'}><KeyRound size={15} /> Use token</button></div>
       {jiraProgress && <p className="field-hint">Sync: {jiraProgress.phase || 'running'} · {Number(jiraProgress.completed || 0).toLocaleString()} / {Number(jiraProgress.total || 0).toLocaleString()}</p>}
-      {workspaceInfo?.workspaces && <p className="field-hint">Source identity: {draft.sourceInstance.id || 'will be assigned on first Jira connection'} · {draft.sourceInstance.provider}</p>}
+      {workspaceInfo?.workspaces && <p className="field-hint">Source identity: {draft.sourceInstance.id || 'assigned before the first import'} · {draft.sourceInstance.provider}</p>}
     </section>
 
     <section className="panel settings-panel">

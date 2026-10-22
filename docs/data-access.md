@@ -8,7 +8,7 @@ Issue filtering, count, and pagination are performed in SQLite. Detail views req
 
 Raw issue and sprint payloads, revisions, changelog pages, import provenance, conflicts, product records, and local relationship events are durable evidence. Semantic projections and report caches are rebuildable. Configuration revisions are persisted and included in report cache fingerprints. Product-record edits invalidate workspace views without forcing an unrelated Jira metric refresh.
 
-Migrations are additive in the SQLite schema and retain existing records. The current app includes database schema upgrades, profile normalization, profile import/export, and workspace backup/restore. It does not yet include a complete dry-run migration utility for copying and reconciling an arbitrary user-owned legacy database into a new installation.
+Migrations are additive in the SQLite schema and retain existing records. The app includes database schema upgrades, profile normalization, profile import/export, workspace backup/restore, and a dry-run-first utility for copying and reconciling a closed legacy workspace into a new database. The copy utility does not merge data into an active workspace or contact Jira.
 
 ## Automated checks
 

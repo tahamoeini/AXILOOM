@@ -3,7 +3,7 @@ const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { gzipSync, gunzipSync } = require('node:zlib');
 const { DatabaseSync } = require('node:sqlite');
-const { DEFAULT_CONFIG, normalizeConfig, validateConfig, configurationFingerprint } = require('./configuration.cjs');
+const { DEFAULT_CONFIG, normalizeConfig, validateConfig, configurationFingerprint, sourceIdentityKey } = require('./configuration.cjs');
 const { resolveSemanticFields, isIssueDone } = require('./semantic-mapping.cjs');
 
 function openDatabase(filePath) {
@@ -690,6 +690,36 @@ function getConfig(db) {
   return validateConfig(saved);
 }
 
+function hasSourceEvidence(db) {
+  const row = db.prepare(`SELECT
+    EXISTS(SELECT 1 FROM jira_issues) OR
+    EXISTS(SELECT 1 FROM jira_issue_tombstones) OR
+    EXISTS(SELECT 1 FROM jira_issue_revisions) OR
+    EXISTS(SELECT 1 FROM jira_issue_history) OR
+    EXISTS(SELECT 1 FROM jira_sprints) OR
+    EXISTS(SELECT 1 FROM jira_sprint_revisions) OR
+    EXISTS(SELECT 1 FROM import_runs) OR
+    EXISTS(SELECT 1 FROM import_files) OR
+    EXISTS(SELECT 1 FROM import_conflicts) OR
+    EXISTS(SELECT 1 FROM local_issue_links) OR
+    EXISTS(SELECT 1 FROM sync_state) AS has_evidence`).get();
+  return Boolean(row.has_evidence);
+}
+
+function isOfflineSourceAttestation(previous, next, eventType) {
+  const current = previous.sourceInstance;
+  const proposed = next.sourceInstance;
+  const sameWorkspaceSource = eventType === 'offline-source-attested'
+    && !previous.jiraUrl && !next.jiraUrl
+    && current.provider === 'offline-json' && proposed.provider === 'offline-json'
+    && current.endpoint === proposed.endpoint
+    && (!current.id || current.id === proposed.id)
+    && (!current.displayName || current.displayName.trim().toLocaleLowerCase('en-US') === proposed.displayName.trim().toLocaleLowerCase('en-US'));
+  const firstIdentity = !current.id && Boolean(proposed.id);
+  const firstName = !current.displayName && Boolean(proposed.displayName);
+  return sameWorkspaceSource && (firstIdentity || firstName);
+}
+
 function projectionForIssue(issue, config) {
   const fields = issue?.fields || {};
   const semantic = resolveSemanticFields(issue, config);
@@ -750,6 +780,12 @@ function rebuildSemanticProjection(db, config = getConfig(db)) {
 
 function saveConfig(db, value, eventType = 'user-update', sourceProfileJson = null) {
   const next = validateConfig(value);
+  const previous = getConfig(db);
+  const sourceChanged = sourceIdentityKey(previous) !== sourceIdentityKey(next);
+  const offlineSourceAttested = sourceChanged && isOfflineSourceAttestation(previous, next, eventType);
+  if (sourceChanged && hasSourceEvidence(db) && !offlineSourceAttested) {
+    throw new Error('This workspace already contains source evidence. Create a separate workspace to connect another source; existing history and links remain attached to their current source.');
+  }
   const timestamp = new Date().toISOString();
   const fingerprint = configurationFingerprint(next);
   const latest = db.prepare('SELECT revision,fingerprint FROM configuration_revisions ORDER BY revision DESC LIMIT 1').get();
@@ -761,6 +797,10 @@ function saveConfig(db, value, eventType = 'user-update', sourceProfileJson = nu
       .run('config', JSON.stringify(next), timestamp);
     db.prepare(`INSERT INTO configuration_revisions(revision,schema_version,fingerprint,event_type,profile_json,source_profile_json,created_at)
       VALUES(?,?,?,?,?,?,?)`).run(next.configurationRevision, next.schemaVersion, fingerprint, String(eventType).slice(0, 80), JSON.stringify(next), sourceProfileJson, timestamp);
+    if (sourceChanged) {
+      db.prepare('DELETE FROM settings WHERE key=?').run('jira_pat_encrypted');
+      db.prepare("DELETE FROM settings WHERE key LIKE 'jira:metadata:%'").run();
+    }
     rebuildSemanticProjection(db, next);
     db.exec('COMMIT');
   } catch (error) {

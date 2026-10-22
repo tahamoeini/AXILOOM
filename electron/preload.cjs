@@ -44,7 +44,7 @@ contextBridge.exposeInMainWorld('axiloom', {
   getConfigurationHistory: () => ipcRenderer.invoke('app:config-history'),
   importConfigProfile: () => ipcRenderer.invoke('app:import-config-profile'),
   exportConfigProfile: () => ipcRenderer.invoke('app:export-config-profile'),
-  beginImport: () => ipcRenderer.invoke('import:begin'),
+  beginImport: (sourceName) => ipcRenderer.invoke('import:begin', sourceName),
   registerImportFile: (metadata) => ipcRenderer.invoke('import:register-file', metadata),
   importIssueBatch: (items, source) => ipcRenderer.invoke('import:issue-batch', items, source),
   importSprintBatch: (items, source) => ipcRenderer.invoke('import:sprint-batch', items, source),

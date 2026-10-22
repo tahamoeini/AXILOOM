@@ -254,7 +254,7 @@ export interface AxiloomApi {
   saveLocalIssueLink: (input: { intakeIssueKey: string; deliveryIssueKey: string; relationship?: string; note?: string }) => Promise<Record<string, any>>;
   removeLocalIssueLink: (id: string) => Promise<{ ok: boolean }>;
   saveConfig: (config: AppConfig) => Promise<AppConfig>;
-  beginImport: () => Promise<{ runId: string }>;
+  beginImport: (sourceName: string) => Promise<{ runId: string; sourceInstanceId: string; sourceName: string }>;
   registerImportFile: (metadata: Record<string, unknown>) => Promise<{ ok: boolean }>;
   importIssueBatch: (items: unknown[], source: string) => Promise<Record<string, number>>;
   importSprintBatch: (items: unknown[], source: string) => Promise<Record<string, number>>;

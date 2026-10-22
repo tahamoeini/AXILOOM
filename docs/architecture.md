@@ -8,7 +8,7 @@ Raw Jira issues, sprints, changelog evidence, import provenance, local product r
 
 ## Current boundaries and gaps
 
-- Separate workspace databases isolate provider IDs across workspaces. Independent source instances within the same workspace are not yet supported.
+- Each workspace database is bound to one stable source identity in its versioned configuration. A source identity change is rejected once issue, sprint, import, tombstone, history, or local Jira-link evidence exists; before ingestion, encrypted credentials and cached Jira metadata for the previous source are cleared. Offline imports require the user to confirm one source name for the whole workspace; older unbound offline data can receive an identity only through an explicit import attestation. Independent sources in one workspace are not yet supported; use separate workspaces to isolate them.
 - Jira field values are resolved through configured project/type-scoped semantic mappings. Not every report has yet been proven to use a single policy path.
 - Project roles, teams, workflows, calendar rules, and modules are configurable. The UI and product-record workflow still contain fixed labels and mostly Persian copy.
 - The provider implementation covers offline JSON and a Jira Server/Data Center-style bearer-token path. Jira Cloud OAuth is not implemented.

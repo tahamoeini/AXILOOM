@@ -173,7 +173,7 @@ function normalizeConfig(input = {}) {
       id: asString(sourceInput.id || (jiraUrl ? stableLegacySourceId(jiraUrl) : ''), 80),
       provider: asString(jiraUrl ? 'jira-datacenter' : (explicitSource ? sourceInput.provider : 'offline-json'), 40),
       displayName: asString(sourceInput.displayName || organization.name, 160),
-      endpoint: asString(sourceInput.endpoint || input.jiraUrl, 2000),
+      endpoint: asString(jiraUrl || sourceInput.endpoint, 2000),
     },
     projects: stringList(input.projects, 80).map((key) => key.toUpperCase()),
     projectRoles: Object.fromEntries(Object.keys(defaults.projectRoles).map((role) => [role, stringList(projectRoles[role], 80).map((key) => key.toUpperCase())])),
@@ -223,7 +223,11 @@ function validateConfig(input) {
   if (config.jiraUrl) assert(config.sourceInstance.provider === 'jira-datacenter', 'A Jira URL requires the Jira Data Center source adapter.');
   assert(config.sourceInstance.id.length <= 80, 'Source instance ID is too long.');
   if (config.sourceInstance.endpoint) {
-    try { new URL(config.sourceInstance.endpoint); } catch { throw new Error('Source instance endpoint is invalid.'); }
+    let endpoint;
+    try { endpoint = new URL(config.sourceInstance.endpoint); } catch { throw new Error('Source instance endpoint is invalid.'); }
+    assert(endpoint.protocol === 'https:', 'Source instance endpoint must use HTTPS.');
+    assert(!endpoint.username && !endpoint.password, 'Credentials must not be embedded in the source endpoint.');
+    assert(!endpoint.search && !endpoint.hash, 'Source endpoint must not contain a query or fragment.');
   }
   assert(config.projects.length <= 500, 'At most 500 projects may be configured.');
   config.projects.forEach((key) => assert(/^[A-Z][A-Z0-9_]*$/.test(key), `Invalid project key: ${key}`));
@@ -368,4 +372,20 @@ function configurationFingerprint(config) {
   return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
 }
 
-module.exports = { CONFIG_SCHEMA_VERSION, DEFAULT_CONFIG, SEMANTIC_KEYS, normalizeConfig, validateConfig, configurationFingerprint };
+function sourceIdentityKey(input) {
+  const config = normalizeConfig(input);
+  const endpoint = String(config.jiraUrl || config.sourceInstance.endpoint || '').trim();
+  let normalizedEndpoint = endpoint;
+  if (endpoint) {
+    try { normalizedEndpoint = new URL(endpoint).toString().replace(/\/$/, ''); }
+    catch { /* Config validation reports malformed source endpoints to the caller. */ }
+  }
+  return createHash('sha256').update(JSON.stringify([
+    config.sourceInstance.provider,
+    config.sourceInstance.id,
+    normalizedEndpoint,
+    config.sourceInstance.provider === 'offline-json' ? config.sourceInstance.displayName.trim().toLocaleLowerCase('en-US') : '',
+  ])).digest('hex');
+}
+
+module.exports = { CONFIG_SCHEMA_VERSION, DEFAULT_CONFIG, SEMANTIC_KEYS, normalizeConfig, validateConfig, configurationFingerprint, sourceIdentityKey };

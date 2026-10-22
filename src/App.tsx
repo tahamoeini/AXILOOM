@@ -89,11 +89,19 @@ export default function App() {
 
   async function startJsonImport(files: FileList | null) {
     if (!files?.length) return;
+    if (!config) { setNotice({ tone: 'error', text: 'Load a workspace configuration before importing Jira files.' }); return; }
+    const configuredSourceName = config.sourceInstance.displayName.trim()
+      || (config.jiraUrl ? new URL(config.jiraUrl).hostname : '');
+    const sourceName = configuredSourceName || (config.sourceInstance.provider === 'offline-json'
+      ? String(window.prompt('Name this offline Jira source. Use a separate workspace for another Jira instance:') || '').trim()
+      : '');
+    if (!sourceName) { setNotice({ tone: 'error', text: 'Set a source name in Settings before importing Jira files.' }); setPage('settings'); return; }
+    if (!window.confirm(`Import these files into source "${sourceName}" in this workspace? Import only files from this Jira instance; use a separate workspace for another source.`)) return;
     const selectedFiles = Array.from(files);
     let workerRef: Worker | null = null;
     setImportProgress({ phase: 'starting', fileName: '', completed: 0, total: selectedFiles.length });
     try {
-      await window.axiloom.beginImport();
+      await window.axiloom.beginImport(sourceName);
       const worker = new Worker(new URL('./workers/import.worker.ts', import.meta.url), { type: 'module' });
       workerRef = worker;
       const workerDone = new Promise<void>((resolve, reject) => {

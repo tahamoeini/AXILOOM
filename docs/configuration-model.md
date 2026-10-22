@@ -16,6 +16,8 @@ The profile contains:
 - Calendar timezone, weekdays, hours, holidays, and effective work intervals.
 - Module switches. A module is enabled only when its declared prerequisites are mapped and valid.
 
+Each workspace has one active source identity. The provider, stable source ID, and canonical endpoint cannot be changed after source evidence or local Jira links are present; connect another Jira instance in a separate workspace. Before ingestion, changing the source identity clears any saved Jira credential and metadata cached for the previous endpoint. Offline JSON imports require a user-confirmed source label that becomes part of that source identity. An older offline workspace with existing evidence but no source ID is bound only after the user confirms which source its existing data belongs to. Configuration profiles cannot move a workspace's existing evidence to a different source.
+
 ## Resolution rules
 
 More specific field bindings take precedence: issue type plus project, then project, then workspace-wide. Overlapping bindings at equal scope are rejected as ambiguous. A missing binding is reported as unmapped; the resolver does not guess from a field label or convert an unknown value to zero.

@@ -35,6 +35,8 @@ On first launch, create or select a workspace and configure its profile before e
 5. Configure workflow completion, commitment states, milestones, and the working calendar.
 6. Validate the profile, then import or synchronize source evidence.
 
+Each workspace is bound to one Jira source. Offline JSON imports ask you to confirm the source name; import only files from that Jira instance, and create a separate workspace for another source. A source with imported evidence cannot be rebound. If an older offline workspace has no source ID, its first import asks you to attest the existing evidence to the named source.
+
 Unmapped or ambiguous values remain visible in data quality. Axiloom does not infer links from title similarity. Jira Epic relationships, Jira issue links, and local product-record relationships remain distinct.
 
 ## Product records and reporting

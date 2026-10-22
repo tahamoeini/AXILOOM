@@ -6,6 +6,7 @@ const { promises: dns } = require('node:dns');
 const fs = require('node:fs');
 const path = require('node:path');
 const { openDatabase, getConfig, saveConfig, saveIssue, saveSprint, saveLocalIssueLink, removeLocalIssueLink, getIssueDetails, getIssueActivity, getSprintDetails, listIssues, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport, getBusinessBoardReport } = require('./database.cjs');
+const { sourceIdentityKey } = require('./configuration.cjs');
 const { writeWorkbook } = require('./xlsx.cjs');
 const workspaceRegistry = require('./workspaces.cjs');
 
@@ -373,8 +374,11 @@ function registerHandlers() {
     } else if (endpointChanged) {
       config.sourceInstance = { id: '', provider: 'offline-json', displayName: '', endpoint: '' };
     }
+    const sourceChanged = sourceIdentityKey(previousConfig) !== sourceIdentityKey(config);
+    if (sourceChanged && (activeImportRun || syncWorker)) throw new Error('Wait for the current import or Jira synchronization to finish before changing the workspace source.');
     const beforeRevision = previousConfig.configurationRevision;
     const saved = saveConfig(db, config);
+    if (sourceChanged) sessionPat = '';
     if (saved.configurationRevision !== beforeRevision) invalidateSnapshot();
     return { ...saved, hasSavedPat: Boolean(db.prepare('SELECT 1 FROM settings WHERE key=?').get('jira_pat_encrypted')) };
   });
@@ -442,12 +446,27 @@ function registerHandlers() {
   });
   ipcMain.handle('issues:unlink', (_event, id) => { const result = removeLocalIssueLink(db, id); if (result.ok) invalidateSnapshot(); return result; });
 
-  ipcMain.handle('import:begin', () => {
+  ipcMain.handle('import:begin', (_event, requestedSourceName) => {
     if (workspaceMaintenance || workspaceBackupInProgress || activeImportRun || syncWorker) throw new Error('همگام‌سازی، پشتیبان‌گیری یا import دیگری در حال اجراست.');
+    const sourceName = String(requestedSourceName || '').trim();
+    if (!sourceName || sourceName.length > 160 || /[\u0000-\u001f\u007f]/.test(sourceName)) throw new Error('Confirm a valid source name before importing Jira files.');
+    let config = getConfig(db);
+    const currentSourceName = String(config.sourceInstance.displayName || '').trim();
+    const sameSourceName = !currentSourceName || currentSourceName.toLocaleLowerCase('en-US') === sourceName.toLocaleLowerCase('en-US');
+    if (!sameSourceName) throw new Error(`This workspace is bound to "${currentSourceName}". Use a separate workspace for another Jira source.`);
+    if (!currentSourceName || config.sourceInstance.provider === 'offline-json' && !config.sourceInstance.id) {
+      const sourceInstance = {
+        ...config.sourceInstance,
+        id: config.sourceInstance.id || randomUUID(),
+        displayName: currentSourceName || sourceName,
+      };
+      config = saveConfig(db, { ...config, sourceInstance }, 'offline-source-attested');
+      invalidateSnapshot();
+    }
     activeImportRun = randomUUID();
     db.prepare('INSERT INTO import_runs(id,started_at,files_json) VALUES(?,?,?)').run(activeImportRun, new Date().toISOString(), '[]');
     invalidateSnapshot();
-    return { runId: activeImportRun };
+    return { runId: activeImportRun, sourceInstanceId: config.sourceInstance.id, sourceName: config.sourceInstance.displayName || sourceName };
   });
   ipcMain.handle('import:register-file', (_event, meta) => {
     if (!activeImportRun) throw new Error('نشست import آغاز نشده است.');

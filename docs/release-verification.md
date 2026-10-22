@@ -7,9 +7,9 @@
 
 | Check | Result | Boundary |
 |---|---|---|
-| `npm run test:configuration` | Passed | Configuration validation and revision behavior on synthetic profiles. |
+| `npm run test:configuration` | Passed | Configuration validation and revision behavior, source rebind guards, pre-ingestion credential/metadata clearing, and explicit legacy offline-source identity attestation. |
 | `npm run test:data-access` | Passed | Synthetic Jira import, semantic mapping, team conflict/unknown/ambiguous attribution, sprint workflow status handling, and data-access/report regression checks. |
-| `npm run test:workspaces` | Passed | Isolation across synthetic local workspace databases; not multi-source isolation within one workspace. |
+| `npm run test:workspaces` | Passed | Two separate workspaces retain identical Jira issue IDs/keys and sprint IDs under distinct source identities; multi-source isolation within one workspace remains unsupported. |
 | `npm run test:migration` | Passed | Synthetic schema-version-1 migration, dry-run cleanup, evidence reconciliation, source immutability, and no-overwrite checks. |
 | `npm run build` | Passed with local filesystem access | TypeScript and Vite production renderer build completed. Sandboxed Vite access fails at `realpath` with `EPERM`. |
 | Renderer UI walkthrough | Passed for the renderer fixture | The in-app browser rendered Overview and Objectives; a synthetic Objective and an `Unknown` Outcome explicitly linked to it were saved in an in-memory mock bridge. This does not exercise Electron IPC, SQLite persistence, Jira, exports, or accessibility. |
@@ -18,7 +18,7 @@
 
 `npm run build:portable` completed the renderer build, then stopped because the verified official Electron `45.0.0` Windows x64 runtime archive is not present in the local cache. The script exits before replacing release output. No portable package, archive, checksum, or fresh-install result was produced. macOS packaging was not run in this Windows environment.
 
-GitHub confirms `tahamoeini/AXILOOM` exists, is public, and the connected account has admin/push permission. The local `origin` points there; the working branch tracks `origin/codex/axiloom-transformation` at baseline commit `89bc9500417550bf11eadcfe6f262e523141243f`. Local `git ls-remote` failed with `getaddrinfo() thread failed to start`, so current remote refs, push, review creation, and CI have not been verified. No repository was created and visibility was not changed. The source repository remains untouched.
+GitHub confirms `tahamoeini/AXILOOM` exists, is public, and the connected account has admin/push permission. The local `origin` points there; the working branch tracks `origin/codex/axiloom-transformation` at baseline commit `89bc9500417550bf11eadcfe6f262e523141243f`. Local `git ls-remote` failed with `getaddrinfo() thread failed to start`. The GitHub API currently finds no `codex/axiloom-implementation-review` branch or related PR. A push of the local source and documentation was rejected by automatic review because this is publication to a public repository and explicit authorization for the exact destination and payload is required. No branch, PR, or CI run was created. No repository was created and visibility was not changed. The source repository remains untouched.
 
 No `LICENSE` file is present in the destination. The intended code license and release attribution remain undecided; do not represent the source as permissively licensed.
 
