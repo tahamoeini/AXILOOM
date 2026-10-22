@@ -11,6 +11,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "test:data-access": "node tools/test-data-access.mjs",
+    "test:semantic-mappings": "node tools/test-semantic-mapping.mjs",
     "test:configuration": "node tools/test-configuration.mjs",
     "test:providers": "node tools/test-jira-providers.mjs",
     "test:workspaces": "node tools/test-workspaces.mjs",

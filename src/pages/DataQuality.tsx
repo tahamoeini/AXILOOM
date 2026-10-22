@@ -45,9 +45,9 @@ export default function DataQuality({ snapshot, config }: { snapshot: Snapshot; 
 
     <section className="panel table-panel">
       <SectionHeading title="پوشش فیلدهای کلیدی" hint={`${formatNumber(snapshot.summary.issueCount, 0)} Issue در فضای محلی بررسی شده‌اند.`} />
-      <DataTable headers={['فیلد', 'برگشتی', 'مقدار دارد', 'null', 'آرایهٔ خالی', 'غایب']} rows={Object.entries(snapshot.quality.fieldCoverage).map(([field, coverage]) => {
-        const semantic = config?.fieldMappings.find((mapping) => mapping.providerFieldId === field)?.semanticKey;
-        return [semantic ? SEMANTIC_LABELS[semantic] || semantic : ({ assignee: 'Assignee', status: 'Status', project: 'Project', components: 'Components', issuetype: 'Issue type' } as Record<string, string>)[field] || field, formatNumber(coverage.returned, 0), formatNumber(coverage.present, 0), formatNumber(coverage.null, 0), formatNumber(coverage.emptyArray, 0), formatNumber(coverage.missing, 0)];
+      <DataTable headers={['فیلد', 'برگشتی', 'مقدار دارد', 'نامعتبر', 'رشتهٔ خالی', 'null', 'آرایهٔ خالی', 'غایب', 'بدون نگاشت']} rows={Object.entries(snapshot.quality.fieldCoverage).map(([field, coverage]) => {
+        const semantic = config?.fieldMappings.find((mapping) => mapping.semanticKey === field)?.semanticKey;
+        return [semantic ? SEMANTIC_LABELS[semantic] || semantic : ({ assignee: 'Assignee', status: 'Status', project: 'Project', components: 'Components', issuetype: 'Issue type' } as Record<string, string>)[field] || field, formatNumber(coverage.returned, 0), formatNumber(coverage.present, 0), formatNumber(coverage.invalid, 0), formatNumber(coverage.emptyString, 0), formatNumber(coverage.null, 0), formatNumber(coverage.emptyArray, 0), formatNumber(coverage.missing, 0), formatNumber(coverage.unmapped, 0)];
       })} empty="بعد از import ساختار داده اینجا دیده می‌شود." />
       {snapshot.quality.unknownFields.length > 0 && <div className="unknown-fields"><b>کلیدهای ناشناخته حفظ‌شده</b><div>{snapshot.quality.unknownFields.map((field) => <code key={field}>{field}</code>)}</div></div>}
     </section>

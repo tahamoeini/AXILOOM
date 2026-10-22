@@ -51,7 +51,7 @@ export interface Snapshot {
   localIssueLinks: Array<Record<string, any>>;
   quality: {
     findings: Array<{ severity: string; code: string; count: number; message: string }>;
-    fieldCoverage: Record<string, { returned: number; missing: number; null: number; emptyArray: number; present: number }>;
+    fieldCoverage: Record<string, { returned: number; missing: number; null: number; emptyArray: number; emptyString: number; present: number; invalid: number; unmapped: number }>;
     unknownFields: string[];
     incompleteHistories: number;
     issuesWithoutHistory: number;

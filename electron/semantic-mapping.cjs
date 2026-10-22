@@ -29,23 +29,38 @@ function issueContext(issue) {
   };
 }
 
-function selectMapping(issue, config, semanticKey) {
+function mappingScopeScore(binding) {
+  return Number(Boolean(binding.projectKey)) * 2 + Number(Boolean(binding.issueTypeId));
+}
+
+function mappingMatchesContext(binding, context) {
+  return (!binding.projectKey || binding.projectKey.toUpperCase() === context.projectKey)
+    && (!binding.issueTypeId || binding.issueTypeId === context.issueTypeId);
+}
+
+function orderedMappings(issue, config, predicate) {
   const context = issueContext(issue);
-  const matches = (Array.isArray(config?.fieldMappings) ? config.fieldMappings : [])
-    .filter((binding) => binding.semanticKey === semanticKey
-      && (!binding.projectKey || binding.projectKey.toUpperCase() === context.projectKey)
-      && (!binding.issueTypeId || binding.issueTypeId === context.issueTypeId));
-  return matches.sort((left, right) => {
-    const score = (binding) => Number(Boolean(binding.projectKey)) * 2 + Number(Boolean(binding.issueTypeId));
-    return score(right) - score(left);
-  })[0] || null;
+  return (Array.isArray(config?.fieldMappings) ? config.fieldMappings : [])
+    .filter((binding) => predicate(binding) && mappingMatchesContext(binding, context))
+    .sort((left, right) => mappingScopeScore(right) - mappingScopeScore(left));
+}
+
+function selectMapping(issue, config, semanticKey) {
+  return orderedMappings(issue, config, (binding) => binding.semanticKey === semanticKey)[0] || null;
+}
+
+function resolveSemanticBinding(issue, config, semanticKey) {
+  return selectMapping(issue, config, semanticKey);
 }
 
 function transformValue(value, transform) {
   if (value === undefined || value === null) return null;
   if (transform === 'number') {
-    if (value === '') return null;
-    const number = Number(value);
+    if (typeof value !== 'number' && typeof value !== 'string') return null;
+    if (typeof value === 'string' && !value.trim()) return null;
+    const number = typeof value === 'string' && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())
+      ? Number.NaN
+      : Number(value);
     return Number.isFinite(number) ? number : null;
   }
   if (transform === 'text') {
@@ -58,12 +73,21 @@ function transformValue(value, transform) {
     if (typeof value === 'object') return String(value.value ?? value.name ?? value.displayName ?? value.key ?? '').trim() || null;
     return String(value).trim() || null;
   }
-  if (transform === 'boolean') return Boolean(value);
+  if (transform === 'boolean') {
+    if (typeof value === 'boolean') return value;
+    if (value === 1 || value === 0) return value === 1;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLocaleLowerCase('en-US');
+      if (normalized === '1' || normalized === 'true') return true;
+      if (normalized === '0' || normalized === 'false') return false;
+    }
+    return null;
+  }
   return value;
 }
 
 function resolveSemanticValue(issue, config, semanticKey) {
-  const binding = selectMapping(issue, config, semanticKey);
+  const binding = resolveSemanticBinding(issue, config, semanticKey);
   if (!binding) return null;
   const value = issue?.fields?.[binding.providerFieldId];
   return transformValue(value, binding.transform);
@@ -75,15 +99,26 @@ function resolveSemanticFields(issue, config) {
 
 function semanticHistoryField(item, config, issue) {
   const providerIds = [item?.fieldId, item?.field].filter(Boolean).map(String);
-  for (const binding of config?.fieldMappings || []) {
-    if (providerIds.includes(String(binding.providerFieldId))) return SEMANTIC_NAMES[binding.semanticKey] || '';
+  const mappings = Array.isArray(config?.fieldMappings) ? config.fieldMappings : [];
+  const rawField = String(item?.field || item?.fieldId || '');
+  const configuredIds = mappings.filter((binding) => providerIds.includes(String(binding.providerFieldId)));
+  if (configuredIds.length) {
+    const matches = orderedMappings(issue, config, (binding) => providerIds.includes(String(binding.providerFieldId)));
+    if (!matches.length) return rawField;
+    const bestScore = mappingScopeScore(matches[0]);
+    const semanticKeys = new Set(matches.filter((binding) => mappingScopeScore(binding) === bestScore).map((binding) => binding.semanticKey));
+    return semanticKeys.size === 1 ? SEMANTIC_NAMES[[...semanticKeys][0]] || rawField : rawField;
   }
   const field = String(item?.field || '').trim().toLowerCase();
-  if (GENERIC_HISTORY_ALIASES.has(field)) return GENERIC_HISTORY_ALIASES.get(field);
-  for (const binding of config?.fieldMappings || []) {
-    const configuredName = String(binding.providerFieldName || '').trim().toLowerCase();
-    if (configuredName && configuredName === field) return SEMANTIC_NAMES[binding.semanticKey] || '';
+  const configuredNames = mappings.filter((binding) => String(binding.providerFieldName || '').trim().toLowerCase() === field && field);
+  if (configuredNames.length) {
+    const matches = orderedMappings(issue, config, (binding) => String(binding.providerFieldName || '').trim().toLowerCase() === field);
+    if (!matches.length) return rawField;
+    const bestScore = mappingScopeScore(matches[0]);
+    const semanticKeys = new Set(matches.filter((binding) => mappingScopeScore(binding) === bestScore).map((binding) => binding.semanticKey));
+    return semanticKeys.size === 1 ? SEMANTIC_NAMES[[...semanticKeys][0]] || rawField : rawField;
   }
+  if (GENERIC_HISTORY_ALIASES.has(field)) return GENERIC_HISTORY_ALIASES.get(field);
   return field === 'status' ? 'status' : '';
 }
 
@@ -113,6 +148,7 @@ function isIssueDone(issue, config) {
 module.exports = {
   SEMANTIC_NAMES,
   issueContext,
+  resolveSemanticBinding,
   resolveSemanticValue,
   resolveSemanticFields,
   semanticHistoryField,

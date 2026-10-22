@@ -83,7 +83,16 @@
           getSourceProviderCapabilities: async (providerId) => (providerId || config.sourceInstance.provider) === 'jira-datacenter'
             ? ({ id: 'jira-datacenter', label: 'Jira Server / Data Center', authentication: 'personal-access-token', capabilities: { fileImport: true, projectDiscovery: true, fieldDiscovery: true, readOnlySync: true, userInitiatedWrites: true } })
             : ({ id: 'offline-json', label: 'Offline Jira JSON import', authentication: 'none', capabilities: { fileImport: true, projectDiscovery: false, fieldDiscovery: false, readOnlySync: false, userInitiatedWrites: false } }),
-          getJiraCatalog: async () => ({ projects: { value: [], updatedAt: '' }, fields: { value: [], updatedAt: '' }, issueTypes: { value: [], updatedAt: '' }, warnings: [] }),
+          getJiraCatalog: async () => ({
+            projects: { value: [{ id: '10001', key: 'ALPHA', name: 'Alpha Product' }], updatedAt: 'synthetic fixture' },
+            fields: { value: [
+              { id: 'customfield_7601', name: 'Estimate', schema: { type: 'number' } },
+              { id: 'customfield_7602', name: 'Initiative Link', schema: { type: 'string' } },
+              { id: 'customfield_7603', name: 'Delivery Team', schema: { type: 'option' } },
+            ], updatedAt: 'synthetic fixture' },
+            issueTypes: { value: [{ id: '101', name: 'Story' }, { id: '102', name: 'Task' }], updatedAt: 'synthetic fixture' },
+            warnings: [],
+          }),
           testJira: async () => ({ ok: true, displayName: 'Synthetic Jira', account: 'synthetic-user' }),
           usePat: async (_token, save) => { config.hasSavedPat = Boolean(save); return { connected: true, saved: Boolean(save) }; },
           forgetPat: async () => { smoke.forgetCalls += 1; config.hasSavedPat = false; return { connected: false, saved: false }; },
@@ -106,6 +115,12 @@
               id: 'synthetic-dc-source', provider: 'jira-datacenter', displayName: 'Synthetic Jira DC',
               endpoint: 'https://jira.synthetic.invalid', networkAccess: { mode: 'private', approvedAddresses: [] },
             };
+            importedProfile.projects = ['ALPHA'];
+            importedProfile.projectRoles = { productIntake: [], technicalDelivery: ['ALPHA'], commitments: [] };
+            importedProfile.fieldMappings = [
+              { semanticKey: 'storyPoints', providerFieldId: 'customfield_7601', providerFieldName: 'Estimate', projectKey: 'ALPHA', issueTypeId: '101', transform: 'number' },
+              { semanticKey: 'team', providerFieldId: 'customfield_7603', providerFieldName: 'Delivery Team', projectKey: 'ALPHA', issueTypeId: '', transform: 'option-label' },
+            ];
             importedProfile.hasSavedPat = true;
             return {
               canceled: false,

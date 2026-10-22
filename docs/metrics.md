@@ -1,6 +1,9 @@
 # Metric semantics and data limits
 
-The metric engine reads raw issue/sprint evidence through the active workspace configuration. A missing mapping or value is reported as unavailable; it is not silently converted to a known zero. Completion status, team, work classification, story points, sprint membership, and calendar rules must be configured for the relevant project and issue type.
+The metric engine reads raw issue/sprint evidence through the active workspace configuration. A missing mapping or value is reported as unavailable; it is not silently converted to a known zero. Completion status, team, work classification, story points, sprint membership, and calendar rules must be configured for the relevant project and issue type. Numeric transforms accept finite numbers and numeric strings only; booleans, objects, empty strings, and malformed text remain unavailable.
+
+Semantic field coverage follows the project/type binding selected for each issue. It reports invalid transformed values separately from explicit `null`, empty string, empty array, missing configured field, and an issue context with no applicable mapping. Invalid counts are warnings; the source value remains in the raw evidence.
+`returned` and `present` are parent counts: the diagnostic counts for empty strings and invalid transforms can overlap with `present`. Multiple active meanings assigned to one Jira field are reported as an alias warning.
 
 ## Sprint boundaries and scope
 

@@ -1,4 +1,4 @@
-const { resolveSemanticFields, semanticHistoryField, configuredCompletedStatuses, isIssueDone } = require('./semantic-mapping.cjs');
+const { resolveSemanticBinding, resolveSemanticFields, semanticHistoryField, transformValue, configuredCompletedStatuses, isIssueDone } = require('./semantic-mapping.cjs');
 
 const KNOWN_FIELDS = new Set([
   'assignee', 'components', 'created', 'issuelinks', 'priority', 'issuetype',
@@ -590,12 +590,15 @@ function buildIssueRows(rawIssues, config) {
 function buildDataQuality(rawIssues, rawSprints, importRuns, conflicts, config = {}) {
   const findings = [];
   const fieldCoverage = {};
-  const coverageFields = [
+  const rawCoverageFields = [
     ...['assignee', 'components', 'issuelinks', 'priority', 'resolutiondate'].map((id) => ({ id, key: id })),
-    ...(config.fieldMappings || []).map((binding) => ({ id: binding.providerFieldId, key: binding.semanticKey })),
   ];
-  coverageFields.forEach(({ key }) => { fieldCoverage[key] = { returned: 0, missing: 0, null: 0, emptyArray: 0, present: 0 }; });
+  const semanticKeys = [...new Set((config.fieldMappings || []).map((binding) => binding.semanticKey))];
+  const emptyCoverage = () => ({ returned: 0, missing: 0, null: 0, emptyArray: 0, emptyString: 0, present: 0, invalid: 0, unmapped: 0 });
+  rawCoverageFields.forEach(({ key }) => { fieldCoverage[key] = emptyCoverage(); });
+  semanticKeys.forEach((key) => { fieldCoverage[key] = emptyCoverage(); });
   const knownFields = new Set([...KNOWN_FIELDS, ...(config.fieldMappings || []).map((binding) => binding.providerFieldId)]);
+  const semanticFieldAliases = new Map();
   const unknownFields = new Set();
   let incompleteHistories = 0;
   let issuesWithoutHistory = 0;
@@ -603,13 +606,50 @@ function buildDataQuality(rawIssues, rawSprints, importRuns, conflicts, config =
   rawIssues.forEach((issue) => {
     const fields = issue.fields || {};
     Object.keys(fields).forEach((key) => { if (!knownFields.has(key)) unknownFields.add(key); });
-    coverageFields.forEach(({ id, key }) => {
+    const bindingsByFieldId = new Map();
+    semanticKeys.forEach((key) => {
+      const binding = resolveSemanticBinding(issue, config, key);
+      if (!binding) return;
+      const keys = bindingsByFieldId.get(binding.providerFieldId) || [];
+      keys.push(key);
+      bindingsByFieldId.set(binding.providerFieldId, keys);
+    });
+    bindingsByFieldId.forEach((keys, providerFieldId) => {
+      if (keys.length < 2) return;
+      const semanticKeysForAlias = [...keys].sort();
+      const aliasKey = `${providerFieldId}|${semanticKeysForAlias.join('|')}`;
+      const alias = semanticFieldAliases.get(aliasKey) || { semanticKeys: semanticKeysForAlias, count: 0 };
+      alias.count += 1;
+      semanticFieldAliases.set(aliasKey, alias);
+    });
+    rawCoverageFields.forEach(({ id, key }) => {
       const target = fieldCoverage[key];
       if (!Object.prototype.hasOwnProperty.call(fields, id)) target.missing += 1;
-      else if (fields[id] === null) target.null += 1;
-      else if (Array.isArray(fields[id]) && fields[id].length === 0) target.emptyArray += 1;
-      else target.present += 1;
-      target.returned = rawIssues.length - target.missing;
+      else {
+        target.returned += 1;
+        if (fields[id] === null) target.null += 1;
+        else if (Array.isArray(fields[id]) && fields[id].length === 0) target.emptyArray += 1;
+        else {
+          target.present += 1;
+          if (typeof fields[id] === 'string' && !fields[id].trim()) target.emptyString += 1;
+        }
+      }
+    });
+    semanticKeys.forEach((key) => {
+      const target = fieldCoverage[key];
+      const binding = resolveSemanticBinding(issue, config, key);
+      if (!binding) { target.unmapped += 1; return; }
+      if (!Object.prototype.hasOwnProperty.call(fields, binding.providerFieldId)) { target.missing += 1; return; }
+      const value = fields[binding.providerFieldId];
+      target.returned += 1;
+      if (value === null || value === undefined) target.null += 1;
+      else if (Array.isArray(value) && value.length === 0) target.emptyArray += 1;
+      else {
+        target.present += 1;
+        const emptyString = typeof value === 'string' && !value.trim();
+        if (emptyString) target.emptyString += 1;
+        if (!emptyString && transformValue(value, binding.transform) === null) target.invalid += 1;
+      }
     });
     if (!issue.changelog) issuesWithoutHistory += 1;
     else if (issue.changelog.historyComplete !== undefined
@@ -618,6 +658,12 @@ function buildDataQuality(rawIssues, rawSprints, importRuns, conflicts, config =
         || Number(issue.changelog.total) > (issue.changelog.histories.length + Number(issue.changelog.startAt || 0)))) incompleteHistories += 1;
     const sprintValues = resolveSemanticFields(issue, config).sprint;
     if (Array.isArray(sprintValues)) sprintValues.forEach((value) => { if (!parseIds(value).size && value) unparsableSprintValues += 1; });
+  });
+  Object.entries(fieldCoverage).forEach(([key, coverage]) => {
+    if (coverage.invalid) findings.push({ severity: 'warning', code: 'SEMANTIC_FIELD_INVALID', semanticKey: key, count: coverage.invalid, message: `${coverage.invalid} مقدارا برای ${key} با تبدیل پیکربندی‌شده سازگار نیست؛ شواهد خام حفظ شده است.` });
+  });
+  semanticFieldAliases.forEach(({ semanticKeys: keys, count }) => {
+    findings.push({ severity: 'warning', code: 'SEMANTIC_FIELD_ALIAS', semanticKeys: keys, count, message: `${count} issue یک فیلد Jira را هم‌زمان به چند معنی نگاشت می‌کند (${keys.join(', ')}); این alias را بررسی کنید.` });
   });
   if (issuesWithoutHistory) findings.push({ severity: 'warning', code: 'HISTORY_NOT_RETURNED', count: issuesWithoutHistory, message: `${issuesWithoutHistory} issueها تاریخچهٔ تغییرات ندارند؛ محاسبهٔ تغییرات تاریخی محدود است.` });
   if (incompleteHistories) findings.push({ severity: 'warning', code: 'HISTORY_PARTIAL', count: incompleteHistories, message: `${incompleteHistories} issue تاریخچهٔ صفحه‌بندی‌نشده یا ناقص دارند.` });

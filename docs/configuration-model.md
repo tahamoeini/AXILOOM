@@ -26,7 +26,7 @@ The provider registry currently exposes offline JSON import and Jira Server/Data
 
 ## Resolution rules
 
-More specific field bindings take precedence: issue type plus project, then project, then workspace-wide. Overlapping bindings at equal scope are rejected as ambiguous. A missing binding is reported as unmapped; the resolver does not guess from a field label or convert an unknown value to zero.
+More specific field bindings take precedence: issue type plus project, then project, then workspace-wide; an issue-type-only binding applies between project-specific and workspace-wide bindings. Overlapping bindings at equal scope are rejected for the same semantic key. A source field actively mapped to multiple meanings is allowed as an explicit alias and surfaced in data-quality findings for review. The changelog resolver uses the issue's current project and issue type for configured field IDs and names; it leaves conflicting or out-of-scope configured IDs unmapped instead of guessing from a familiar display name.
 
 Team assignment follows configured board and field mappings plus explicit user overrides. Team names and aliases are case-insensitively unique across teams; ambiguous labels are rejected at profile validation. When an issue's configured team differs from its sprint board route, the configured team remains the report attribution and a data-quality warning records the disagreement. Unknown or ambiguous issue-team values fall back to the board route with a warning. If neither source resolves a team, the issue remains in universal totals and is excluded from team-specific totals.
 
