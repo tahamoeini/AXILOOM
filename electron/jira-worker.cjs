@@ -150,7 +150,8 @@ async function syncSprintBoards() {
 
 function issueRowsNeedingHistory() {
   const issues = [];
-  for (const row of db.prepare('SELECT jira_id,issue_key,raw_json,history_complete,history_total FROM jira_issues WHERE issue_key NOT IN (SELECT issue_key FROM jira_issue_tombstones)').iterate()) {
+  const issuesStatement = db.prepare('SELECT jira_id,issue_key,raw_json,history_complete,history_total FROM jira_issues WHERE issue_key NOT IN (SELECT issue_key FROM jira_issue_tombstones)');
+  for (const row of issuesStatement.iterate()) {
     let issue;
     try { issue = JSON.parse(row.raw_json); } catch { continue; }
     const history = issue.changelog;

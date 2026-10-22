@@ -419,7 +419,10 @@ function getBusinessBoardReport(db, filters = {}) {
   const total = Number(db.prepare('SELECT COUNT(*) AS count FROM business_issue_cache WHERE ' + clause).get(...params)?.count || 0);
   const page = db.prepare('SELECT payload_json FROM business_issue_cache WHERE ' + clause + ' ORDER BY issue_key LIMIT ? OFFSET ?')
     .all(...params, pageSize, offset).map((row) => safeJson(row.payload_json, null)).filter(Boolean);
-  const matchingRows = filters.includeAggregates === false ? [] : db.prepare('SELECT payload_json FROM business_issue_cache WHERE ' + clause + ' ORDER BY issue_key').iterate(...params);
+  const matchingStatement = filters.includeAggregates === false
+    ? null
+    : db.prepare('SELECT payload_json FROM business_issue_cache WHERE ' + clause + ' ORDER BY issue_key');
+  const matchingRows = matchingStatement ? matchingStatement.iterate(...params) : [];
   const statuses = new Map(), components = new Map(), assignees = new Map(), componentAssignees = new Map(), monthly = new Map();
   const departments = new Map(), productOwners = new Map(), organizationMonthly = new Map();
   const uniqueDeliveryKeys = new Set(), matchingRecordIds = new Set(), ageRanges = [
@@ -768,7 +771,8 @@ function rebuildSemanticProjection(db, config = getConfig(db)) {
     issue_key,project_key,issue_type_id,story_points,epic_key,epic_name,sprint_value_json,team_label,
     work_classification,issue_tags_json,requester,department,product_owner,logged_time,mapping_revision
   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-  for (const row of db.prepare('SELECT issue_key,raw_json FROM jira_issues').iterate()) {
+  const issuesStatement = db.prepare('SELECT issue_key,raw_json FROM jira_issues');
+  for (const row of issuesStatement.iterate()) {
     const issue = safeJson(row.raw_json, null);
     if (!issue) continue;
     const item = projectionForIssue(issue, config);
