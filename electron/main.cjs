@@ -322,6 +322,7 @@ function savedPat() {
 }
 
 function rememberPat(token, save) {
+  if (jiraManagementOperations) throw new Error('Wait for the active Jira operation before replacing credentials.');
   const clean = String(token || '').trim();
   if (!clean) throw new Error('PAT خالی است.');
   sessionPat = clean;
@@ -350,7 +351,9 @@ function stopSyncWorkerAndWait() {
 }
 
 async function forgetPat() {
+  if (jiraManagementOperations) throw new Error('Wait for the active Jira operation before forgetting credentials.');
   await stopSyncWorkerAndWait();
+  if (jiraManagementOperations) throw new Error('Wait for the active Jira operation before forgetting credentials.');
   clearPat();
   return { connected: false, saved: false };
 }
@@ -388,6 +391,7 @@ function registerHandlers() {
     return { ...openActiveWorkspace(nextInfo, nextRegistry), workspaces: workspaceRegistry.describeRegistry(workspaceRoot, workspaceIndex) };
   });
   ipcMain.handle('app:save-config', (_event, value) => {
+    if (jiraManagementOperations) throw new Error('Wait for the active Jira operation before changing workspace configuration.');
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Configuration must be an object.');
     const previousConfig = getConfig(db);
     const config = { ...previousConfig, ...value };

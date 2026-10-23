@@ -37,3 +37,26 @@ for (const channel of ['workspace:backup', 'workspace:restore', 'app:import-conf
   await assert.rejects(handlers.get(channel)(), /active workspace changed/);
 }
 console.log('Backup, restore, and profile dialog workspace-switch regression checks passed.');
+
+const configStart = source.indexOf("  ipcMain.handle('app:save-config'");
+const configEnd = source.indexOf("  ipcMain.handle('app:validate-config'", configStart);
+assert.ok(configStart >= 0 && configEnd > configStart);
+const handlers = new Map();
+const locked = vm.createContext({
+  jiraManagementOperations: 1,
+  ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+});
+vm.runInContext(source.slice(configStart, configEnd), locked);
+assert.throws(() => handlers.get('app:save-config')(null, {}), /active Jira operation/);
+for (const [begin, end, call] of [
+  ['function rememberPat(', 'function clearPat(', "rememberPat('synthetic', false)"],
+  ['async function forgetPat(', 'function registerHandlers(', 'forgetPat()'],
+]) {
+  const first = source.indexOf(begin);
+  const last = source.indexOf(end, first);
+  assert.ok(first >= 0 && last > first);
+  vm.runInContext(source.slice(first, last), locked);
+  if (call.startsWith('forget')) await assert.rejects(vm.runInContext(call, locked), /active Jira operation/);
+  else assert.throws(() => vm.runInContext(call, locked), /active Jira operation/);
+}
+console.log('In-flight Jira configuration and credential guards passed.');
