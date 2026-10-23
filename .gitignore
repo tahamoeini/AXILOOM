@@ -9,3 +9,4 @@ workspace/
 *.sqlite-wal
 *.p360
 .test-tmp/
+.tmp/
