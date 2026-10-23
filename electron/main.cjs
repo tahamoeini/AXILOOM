@@ -408,18 +408,23 @@ function registerHandlers() {
   });
   ipcMain.handle('app:config-history', () => db.prepare('SELECT revision,schema_version AS schemaVersion,fingerprint,event_type AS eventType,created_at AS createdAt FROM configuration_revisions ORDER BY revision DESC LIMIT 100').all());
   ipcMain.handle('app:import-config-profile', async () => {
+    const requestedDatabase = databaseFile;
     const result = await dialog.showOpenDialog(mainWindow, { title: 'Import configuration profile', properties: ['openFile'], filters: [{ name: 'JSON profile', extensions: ['json'] }] });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    if (databaseFile !== requestedDatabase) throw new Error('The active workspace changed while selecting the profile. Start import again.');
     const stats = await fs.promises.stat(result.filePaths[0]);
     if (stats.size > 2 * 1024 * 1024) throw new Error('Configuration profile exceeds the 2 MB limit.');
     const raw = await fs.promises.readFile(result.filePaths[0], 'utf8');
+    if (databaseFile !== requestedDatabase) throw new Error('The active workspace changed while reading the profile. Start import again.');
     const { validateConfig } = require('./configuration.cjs');
     const profile = validateConfig(JSON.parse(raw));
     return { canceled: false, profile, dryRun: true };
   });
   ipcMain.handle('app:export-config-profile', async () => {
+    const requestedDatabase = databaseFile;
     const result = await dialog.showSaveDialog(mainWindow, { title: 'Export configuration profile', defaultPath: 'axiloom-profile.json', filters: [{ name: 'JSON profile', extensions: ['json'] }] });
     if (result.canceled || !result.filePath) return { canceled: true };
+    if (databaseFile !== requestedDatabase) throw new Error('The active workspace changed while selecting the profile destination. Start export again.');
     const profile = getConfig(db);
     delete profile.hasSavedPat;
     await fs.promises.writeFile(result.filePath, `${JSON.stringify(profile, null, 2)}\n`, { flag: 'wx' });
