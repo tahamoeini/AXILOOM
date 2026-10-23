@@ -55,6 +55,8 @@ The application includes a local Vazirmatn font. Date, time, and number formatti
 
 ## Developer checks
 
+Run `npm run verify` for all eight regression suites followed by the production renderer build. GitHub verification runs on `main` pushes and pull requests; Windows release packaging also runs the complete regression suite.
+
 ```powershell
 npm run test:configuration
 npm run test:data-access

@@ -3,7 +3,7 @@ name: Portable Windows release
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - '.github/workflows/portable-release.yml'
       - '.github/workflows/macos-release.yml'
@@ -12,6 +12,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'src/**'
+      - 'shared/**'
+      - 'schemas/**'
       - 'tools/build-portable.mjs'
       - 'tools/build-macos.mjs'
       - 'vite.config.ts'
@@ -113,8 +115,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Test SQLite projections, caches, and migrations
-        run: npm run test:data-access
+      - name: Run all regression suites
+        run: npm test
 
       - name: Build portable app
         run: npm run build:portable

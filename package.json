@@ -22,7 +22,9 @@
     "migrate:workspace": "node tools/migrate-workspace.mjs",
     "build:portable": "npm run build && node tools/build-portable.mjs",
     "build:mac": "npm run build && node tools/build-macos.mjs",
-    "launch:portable": "node tools/launch-portable.mjs"
+    "launch:portable": "node tools/launch-portable.mjs",
+    "test": "npm run test:configuration && npm run test:providers && npm run test:data-access && npm run test:semantic-mappings && npm run test:reporting && npm run test:setup && npm run test:workspaces && npm run test:migration",
+    "verify": "npm test && npm run build"
   },
   "dependencies": {
     "@fontsource/vazirmatn": "5.3.0",
