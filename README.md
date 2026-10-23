@@ -57,6 +57,8 @@ The application includes a local Vazirmatn font. Date, time, and number formatti
 
 Run `npm run verify` for all eight regression suites followed by the production renderer build. GitHub verification runs on `main` pushes and pull requests; Windows release packaging also runs the complete regression suite.
 
+After building the portable app, set `AXILOOM_SMOKE_ELECTRON` to a raw Electron executable and run `npm run test:native`. This creates disposable synthetic workspaces under `.test-tmp` and checks real preload/IPC, record persistence, workspace isolation, XLSX/PDF generation, and backup/restore recovery. Dialog selections and restart calls are intercepted; actual dialog interaction and process relaunch are separate acceptance checks. Windows release CI runs this test before publication.
+
 ```powershell
 npm run test:configuration
 npm run test:data-access

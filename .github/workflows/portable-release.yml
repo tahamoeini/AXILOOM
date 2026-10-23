@@ -17,6 +17,8 @@ on:
       - 'tools/build-portable.mjs'
       - 'tools/build-macos.mjs'
       - 'tools/verify-package.mjs'
+      - 'tools/native-smoke.cjs'
+      - 'tools/run-native-smoke.mjs'
       - 'vite.config.ts'
   workflow_dispatch:
     inputs:
@@ -145,6 +147,24 @@ jobs:
 
       - name: Verify packaged runtime dependencies
         run: node tools/verify-package.mjs
+
+      - name: Verify native IPC, exports, and recovery
+        shell: pwsh
+        run: |
+          $runtimePath = Join-Path $env:RUNNER_TEMP 'axiloom-smoke-runtime'
+          Expand-Archive -LiteralPath $env:AXILOOM_ELECTRON_ARCHIVE -DestinationPath $runtimePath -Force
+          $env:AXILOOM_SMOKE_ELECTRON = Join-Path $runtimePath 'electron.exe'
+          npm run test:native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Retain native smoke evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-smoke-evidence
+          path: .test-tmp/native-smoke-*/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Create GitHub release and upload ZIP
         shell: pwsh
