@@ -26,3 +26,9 @@ This section supersedes earlier branch and package availability statements above
 - ZIP SHA-256: 3761e00237388b83d1431e42ad4301f65fff6123ed91918d4b01002df718807a. Artifact: release/Axiloom-Portable.zip (ignored local output).
 
 This is a repository/automation and package verification pass, not final product acceptance. Native fresh-install/UI/IPC testing, live Jira and guarded-write failure injection, authorized real-data migration, complete localization/accessibility, licensing decisions, and remaining performance/parity gates remain open. No license has been invented on the owner's behalf. Hosted CI results must be checked after synchronization.
+
+## Packaged dependency correction
+
+The entry-file inspection above was insufficient: both packagers omitted shared JSON required by Electron modules through ../shared. Fixed Windows and macOS packaging to include Resources/shared (resources/shared on Windows). Added tools/verify-package.mjs to load configuration, database, Jira management, provider, metadata, and page-budget modules from the distributed layout; Windows release CI now runs it and requires both JSON files in the ZIP.
+
+Rebuilt Windows portable successfully and passed the packaged module load check. macOS script syntax passed; macOS packaging and native UI launch remain unverified. The replacement ZIP SHA-256 is 67178d9fa2a055a3f631d813f8a1ed2ff46928f85491d5a22a866d3699e32aad, superseding the earlier archive hash.

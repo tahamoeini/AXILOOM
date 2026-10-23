@@ -93,6 +93,7 @@ fs.copyFileSync(runtimeExecutable, path.join(staging, 'Axiloom.exe'));
 
 const appDirectory = path.join(staging, 'resources', 'app');
 fs.mkdirSync(appDirectory, { recursive: true });
+fs.cpSync(path.join(root, 'shared'), path.join(appDirectory, '..', 'shared'), { recursive: true });
 fs.cpSync(path.join(root, 'build'), path.join(appDirectory, 'build'), { recursive: true });
 const electronRuntimeDirectory = path.join(root, 'electron');
 const electronRuntimeFiles = fs.readdirSync(electronRuntimeDirectory)

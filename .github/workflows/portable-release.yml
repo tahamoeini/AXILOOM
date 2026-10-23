@@ -122,6 +122,7 @@ jobs:
         run: npm run build:portable
 
       - name: Verify portable archive contents
+        # Resolve runtime dependencies from the packaged directory as well.
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -131,7 +132,7 @@ jobs:
           $zip = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
           try {
             $entries = @($zip.Entries | ForEach-Object { $_.FullName })
-            $required = @('Axiloom.exe', 'resources/app/main.cjs', 'resources/app/build/index.html')
+            $required = @('Axiloom.exe', 'resources/app/main.cjs', 'resources/app/build/index.html', 'resources/shared/resource-limits.json', 'resources/shared/record-templates.json')
             $missing = @($required | Where-Object { $_ -notin $entries })
             if ($missing.Count) { throw "Portable ZIP is missing: $($missing -join ', ')" }
             if ($entries -contains 'workspace/workspace.sqlite') { throw 'Portable ZIP must not contain a builder workspace database.' }
@@ -140,6 +141,9 @@ jobs:
           }
 
           Write-Host "Portable ZIP verified: $((Get-Item $archivePath).Length) bytes."
+
+      - name: Verify packaged runtime dependencies
+        run: node tools/verify-package.mjs
 
       - name: Create GitHub release and upload ZIP
         shell: pwsh

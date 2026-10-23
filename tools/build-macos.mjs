@@ -90,6 +90,7 @@ try {
   for (const file of fs.readdirSync(path.join(root, 'electron')).filter((name) => name.endsWith('.cjs')).sort()) {
     fs.copyFileSync(path.join(root, 'electron', file), path.join(appDirectory, file));
   }
+  fs.cpSync(path.join(root, 'shared'), path.join(appDirectory, '..', 'shared'), { recursive: true });
   fs.writeFileSync(path.join(appDirectory, 'package.json'), JSON.stringify({ name: 'axiloom', version, main: 'main.cjs', private: true }, null, 2));
   fs.mkdirSync(path.join(appDirectory, 'licenses'), { recursive: true });
   for (const [packageName, licenseName, destination] of [
