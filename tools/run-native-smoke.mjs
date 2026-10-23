@@ -29,6 +29,7 @@ try {
   assert.equal(code, 0, 'Native Electron exited unsuccessfully');
   assert.equal(result.recordPersistenceVerified, true);
   assert.equal(result.backupRestoreVerified, true);
+  assert.equal(result.invalidRestorePreservedWorkspace, true);
   console.log(`Native IPC, persistence, isolation, exports, and recovery passed. Evidence: ${resultPath}`);
 } catch (error) {
   console.error(diagnostics);

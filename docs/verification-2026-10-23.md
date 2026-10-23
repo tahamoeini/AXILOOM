@@ -72,3 +72,9 @@ Added npm run test:native with an owned-process runner, unique disposable storag
 ## Hosted verification
 
 Public GitHub API confirmed default branch main. Verify run 39958704436 for 841f076 completed successfully, including npm ci and npm run verify on windows-latest. Earlier Verify runs for ae05f7b, 1bea69e, 78e0dd9, and 53db183 also completed successfully. Windows release run 39958704390 for 841f076 was still running its regression suites when inspected; native release-gate success and publication are not yet claimed. CLI authentication is absent; public REST metadata supplied this evidence.
+
+Follow-up inspection of release run 39958704390 confirmed successful regression suites, portable build, ZIP inspection, packaged dependencies, and native IPC/exports/recovery. Release upload remained in progress at inspection; publication completion is not claimed.
+
+## Native restore rejection coverage
+
+The native smoke now selects two invalid backups before the valid backup: plain non-SQLite bytes and a corrupt file carrying the SQLite header. Both restore requests must reject, and listRecords must still return the post-backup record after each failure. The subsequent valid restore and recovery-database assertions must still pass. The runner asserts invalidRestorePreservedWorkspace=true. This expanded suite passed locally. It covers header rejection and worker-level corrupt input rejection, but not injected rename/permission failures.

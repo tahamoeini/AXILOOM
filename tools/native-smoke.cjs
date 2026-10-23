@@ -7,8 +7,14 @@ if (!resultPath || !process.env.PORTABLE_EXECUTABLE_DIR) throw new Error('Set AX
 const timer = setTimeout(() => finish({ ok: false, error: 'Native smoke timed out' }), 30000);
 dialog.showSaveDialog = async (_window, options) => ({ canceled: false,
   filePath: path.join(process.env.PORTABLE_EXECUTABLE_DIR, options.filters[0].extensions[0] === 'axw' ? 'native-smoke.axw' : options.defaultPath) });
-dialog.showOpenDialog = async () => ({ canceled: false,
-  filePaths: [path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'native-smoke.axw')] });
+let restoreSelections = 0;
+dialog.showOpenDialog = async () => {
+  const name = ['invalid-backup.axw', 'corrupt-backup.axw', 'native-smoke.axw'][Math.min(restoreSelections++, 2)];
+  const selected = path.join(process.env.PORTABLE_EXECUTABLE_DIR, name);
+  if (name === 'invalid-backup.axw') fs.writeFileSync(selected, 'Synthetic invalid SQLite backup');
+  if (name === 'corrupt-backup.axw') fs.writeFileSync(selected, Buffer.concat([Buffer.from('SQLite format 3\0'), Buffer.alloc(4096)]));
+  return { canceled: false, filePaths: [selected] };
+};
 let relaunchRequested = false;
 let quitRequested = false;
 app.relaunch = () => { relaunchRequested = true; };
@@ -45,10 +51,19 @@ app.on('web-contents-created', (_event, contents) => {
         const pdf = await window.axiloom.exportPdf(report);
         const backup = await window.axiloom.backup();
         const later = await window.axiloom.saveRecord({ kind: 'objective', title: 'Synthetic record after backup', payload: {} });
+        for (let attempt = 0; attempt < 2; attempt++) {
+          let rejectedInvalidRestore = false;
+          try { await window.axiloom.restore(); }
+          catch { rejectedInvalidRestore = true; }
+          if (!rejectedInvalidRestore) throw new Error('Invalid backup was accepted');
+          const afterRejectedRestore = await window.axiloom.listRecords({});
+          if (!afterRejectedRestore.items.some(item => item.id === later.id)) throw new Error('Invalid restore changed active records');
+        }
         const restore = await window.axiloom.restore();
         if (!restore.restored) throw new Error('Restore did not finish');
         return { ok: true, workspaceId: workspace.id, databasePath: workspace.path,
           backupPath: backup.filePath, laterRecordId: later.id,
+          invalidRestorePreservedWorkspace: true,
           xlsxPath: xlsx.filePath, pdfPath: pdf.filePath,
           recordId: record.id, isolatedWorkspaceId: second.id, recordPersistenceVerified: true,
           configRevision: config.configurationRevision, snapshotKeys: Object.keys(snapshot),
