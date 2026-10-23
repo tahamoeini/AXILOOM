@@ -92,6 +92,7 @@ try {
   }
   fs.cpSync(path.join(root, 'shared'), path.join(appDirectory, '..', 'shared'), { recursive: true });
   fs.writeFileSync(path.join(appDirectory, 'package.json'), JSON.stringify({ name: 'axiloom', version, main: 'main.cjs', private: true }, null, 2));
+  execFileSync(process.execPath, [path.join(root, 'tools', 'verify-package.mjs'), appDirectory], { stdio: 'inherit' });
   fs.mkdirSync(path.join(appDirectory, 'licenses'), { recursive: true });
   for (const [packageName, licenseName, destination] of [
     ['@fontsource/vazirmatn', 'LICENSE', 'Vazirmatn-OFL.txt'], ['react', 'LICENSE', 'React-MIT.txt'],

@@ -103,6 +103,7 @@ for (const file of electronRuntimeFiles) {
   fs.copyFileSync(path.join(electronRuntimeDirectory, file), path.join(appDirectory, file));
 }
 fs.writeFileSync(path.join(appDirectory, 'package.json'), JSON.stringify({ name: 'axiloom', version: appVersion, main: 'main.cjs', private: true }, null, 2));
+execFileSync(process.execPath, [path.join(root, 'tools', 'verify-package.mjs'), appDirectory], { stdio: 'inherit' });
 const licensesDirectory = path.join(appDirectory, 'licenses');
 fs.mkdirSync(licensesDirectory, { recursive: true });
 for (const [packageName, licenseName, destination] of [

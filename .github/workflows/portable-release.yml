@@ -16,6 +16,7 @@ on:
       - 'schemas/**'
       - 'tools/build-portable.mjs'
       - 'tools/build-macos.mjs'
+      - 'tools/verify-package.mjs'
       - 'vite.config.ts'
   workflow_dispatch:
     inputs:
