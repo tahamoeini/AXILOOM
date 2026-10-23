@@ -282,7 +282,6 @@ function createDataCenterAdapter(config, token, dependencies = {}) {
       try {
         response = await sendRequest({ target, method, headers, body, address, signal, timeoutMs });
       } catch (error) {
-        console.error('DEBUG jira sendRequest error', error);
         if (signal?.aborted) throw abortError(signal);
         if (retryableMethod && attempt < 2 && isRetryableNetworkError(error)) {
           await delay(250 * (2 ** attempt), signal);
