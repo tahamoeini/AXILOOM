@@ -264,9 +264,14 @@ async function run() {
   } finally { db.close(); }
 }
 
-run().then(() => parentPort.postMessage({ type: 'done', value: { runId: activeRunId } }))
+function sendTerminal(message) {
+  try { parentPort.postMessage(message); }
+  finally { parentPort.close(); }
+}
+
+run().then(() => sendTerminal({ type: 'done', value: { runId: activeRunId } }))
   .catch((error) => {
     try { db.close(); } catch { /* already closed */ }
     const cancelled = abortController.signal.aborted || error?.name === 'AbortError';
-    parentPort.postMessage({ type: cancelled ? 'cancelled' : 'error', error: cancelled ? 'Synchronization cancelled by user.' : error.message });
+    sendTerminal({ type: cancelled ? 'cancelled' : 'error', error: cancelled ? 'Synchronization cancelled by user.' : error.message });
   });
