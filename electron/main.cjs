@@ -116,8 +116,9 @@ function getWorkspacePath() {
   return workspaceRoot;
 }
 
+let jiraManagementOperations = 0;
 function workspaceOperationsBusy() {
-  return Boolean(activeImportRun || syncWorker || workspaceBackupInProgress || workspaceMaintenance
+  return Boolean(jiraManagementOperations || activeImportRun || syncWorker || workspaceBackupInProgress || workspaceMaintenance
     || workspaceBackupWorkers.size || snapshotWorkers.size || snapshotFlights.size || dataAccessWorkers.size || dataAccessQueue.length);
 }
 
@@ -355,7 +356,13 @@ async function forgetPat() {
 }
 
 function registerHandlers() {
-  require('./jira-management.cjs').registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, getIssueDetails, invalidateSnapshot });
+  require('./jira-management.cjs').registerJiraManagement({ ipcMain, getDatabase: () => db,
+    beginOperation: () => {
+      if (workspaceMaintenance) throw new Error('Workspace maintenance is in progress.');
+      jiraManagementOperations++;
+    },
+    endOperation: () => { jiraManagementOperations--; },
+    jiraFetch, savedPat, saveIssue, getIssueDetails, invalidateSnapshot });
   ipcMain.handle('app:get-config', () => ({ ...getConfig(db), hasSavedPat: Boolean(db.prepare('SELECT 1 FROM settings WHERE key=?').get('jira_pat_encrypted')) }));
   ipcMain.handle('workspace:info', () => ({ id: activeWorkspace.id, name: activeWorkspace.name, path: databaseFile, warning: workspaceWarning, workspaces: workspaceRegistry.describeRegistry(workspaceRoot, workspaceIndex) }));
   ipcMain.handle('workspace:create', (_event, requestedName) => {
@@ -663,7 +670,7 @@ function registerHandlers() {
   ipcMain.handle('workspace:restore', async () => {
     assertWorkspacePaths();
     const requestedDatabase = databaseFile;
-    const busy = () => workspaceMaintenance || activeImportRun || syncWorker || workspaceBackupInProgress || workspaceBackupWorkers.size || snapshotWorkers.size || snapshotFlights.size || dataAccessWorkers.size || dataAccessQueue.length;
+    const busy = () => jiraManagementOperations || workspaceMaintenance || activeImportRun || syncWorker || workspaceBackupInProgress || workspaceBackupWorkers.size || snapshotWorkers.size || snapshotFlights.size || dataAccessWorkers.size || dataAccessQueue.length;
     if (busy()) throw new Error('برای بازیابی، صبر کنید تا import، همگام‌سازی و خواندن داده‌ها تمام شود.');
     const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, { title: 'بازیابی فضای Axiloom', properties: ['openFile'], filters: [{ name: 'Axiloom Workspace', extensions: ['axw', 'sqlite', 'db'] }] });
     if (canceled || !filePaths[0]) return { canceled: true };

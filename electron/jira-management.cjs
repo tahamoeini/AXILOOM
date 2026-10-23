@@ -44,7 +44,16 @@ function hasCommentMarker(comment, marker) {
   return typeof body === 'string' ? body.includes(marker) : JSON.stringify(body ?? '').includes(marker);
 }
 
-function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, getIssueDetails, invalidateSnapshot }) {
+function registerJiraManagement({ ipcMain: transport, db, getDatabase = () => db, beginOperation = () => {}, endOperation = () => {}, jiraFetch, savedPat, saveIssue, getIssueDetails, invalidateSnapshot }) {
+  const ipcMain = { handle(channel, handler) {
+    transport.handle(channel, async (...args) => {
+      beginOperation();
+      try {
+        db = getDatabase();
+        return await handler(...args);
+      } finally { endOperation(); }
+    });
+  } };
   const locked = new Set();
   const keyOf = (value) => {
     const key = String(value || '').trim().toUpperCase();

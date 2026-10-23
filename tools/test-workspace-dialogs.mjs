@@ -16,6 +16,7 @@ for (const channel of ['workspace:backup', 'workspace:restore', 'app:import-conf
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     assertWorkspacePaths() {}, databaseFile: 'workspace-a.sqlite',
     activeImportRun: null, syncWorker: null, workspaceBackupInProgress: false,
+    jiraManagementOperations: 0,
     workspaceMaintenance: false, workspaceBackupWorkers: new Set(),
     snapshotWorkers: new Set(), snapshotFlights: new Set(),
     dataAccessWorkers: new Set(), dataAccessQueue: [], mainWindow: null,
