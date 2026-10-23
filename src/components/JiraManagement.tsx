@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AppConfig, IssueDetails, ProductRecord, Snapshot } from '../types';
 import JiraIssueEditor from './JiraIssueEditor';
 import { DataTable, IssueKey, MultiSelect, formatDate, formatNumber } from './Primitives';
+import { serializeAttachmentSelection } from '../jira-attachments';
 
 export default function JiraManagement({ details, snapshot, config, live, reload, refresh, openIssue, notify, deleted }: {
   details: IssueDetails; snapshot: Snapshot; config: AppConfig | null; live: boolean; reload: () => Promise<void>; refresh: () => Promise<void>; openIssue: (key: string) => void; notify: (message: string) => void; deleted: () => void;
@@ -18,6 +19,7 @@ export default function JiraManagement({ details, snapshot, config, live, reload
   const [recordIds, setRecordIds] = useState<string[]>([]);
   const [recordOptions, setRecordOptions] = useState<ProductRecord[]>([]);
   const [recordOptionQuery, setRecordOptionQuery] = useState('');
+  const [recordLinkUnknown, setRecordLinkUnknown] = useState(false);
   const [related, setRelated] = useState<ProductRecord[]>([]);
   const fields = details.raw.fields || {};
   const comments = fields.comment?.comments || [];
@@ -56,6 +58,25 @@ export default function JiraManagement({ details, snapshot, config, live, reload
     catch (e) { setError(e instanceof Error ? e.message : 'عملیات انجام نشد.'); }
     finally { setBusy(false); }
   }
+  async function linkSelectedRecords() {
+    setBusy(true); setError(''); setRecordLinkUnknown(false);
+    try {
+      const result = await window.axiloom.linkJiraRecords({ key: details.key, recordIds });
+      notify(result?.warning || 'پیوندهای ثبت محصول ذخیره شدند.'); await reload(); await refresh();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'عملیات انجام نشد.';
+      setError(message);
+      if (/outcome is unknown|outcome is still unknown/i.test(message)) setRecordLinkUnknown(true);
+    } finally { setBusy(false); }
+  }
+  async function confirmRecordLinkRetry() {
+    const confirmation = window.prompt('Check Jira for this exact Axiloom reference marker. Type the sentence below only if no matching marker exists.\n\nI checked Jira and no matching Axiloom reference exists');
+    if (confirmation !== 'I checked Jira and no matching Axiloom reference exists') return;
+    try {
+      await window.axiloom.confirmJiraRecordLinkRetry({ key: details.key, recordIds, confirmation });
+      setRecordLinkUnknown(false); setError('Retry enabled after your Jira check. The next attempt will reconcile the marker again before sending.');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Retry confirmation failed.'); }
+  }
   return <section className="issue-detail-section"><h3>مدیریت تسک واقعی Jira</h3>
     <div className="jira-management-actions"><button className="button secondary" disabled={busy} onClick={() => perform(reload, 'نسخهٔ تازهٔ Jira دریافت شد.', false)}>بازخوانی از Jira</button>
       <button className="button primary" disabled={busy || !live || !caps?.permissions.EDIT_ISSUES} onClick={() => setEditor({})}>ویرایش فیلدها</button>
@@ -76,7 +97,7 @@ export default function JiraManagement({ details, snapshot, config, live, reload
     <h3>پیوست‌ها</h3><DataTable headers={['نام فایل', 'اندازه (بایت)', 'ایجاد', 'نوع']} rows={(fields.attachment || []).map((file: any) => [file.filename, file.size, formatDate(file.created), file.mimeType])} />
     <label className="form-field">افزودن پیوست<input type="file" multiple onChange={(e) => setFiles(Array.from(e.target.files || []))} /></label><button className="button secondary" disabled={busy || !live || !files.length} onClick={() => {
       if (!window.confirm(`فایل‌های ${files.map((file) => file.name).join('، ')} به ${details.key} ارسال شوند؟`)) return;
-      void perform(async () => { const result = await window.axiloom.uploadJiraAttachments({ key: details.key, files: await Promise.all(files.map(async (file) => ({ name: file.name, type: file.type, bytes: new Uint8Array(await file.arrayBuffer()) }))) }); setFiles([]); return result; }, 'پیوست‌ها ارسال شدند.');
+      void perform(async () => { const result = await window.axiloom.uploadJiraAttachments({ key: details.key, files: await serializeAttachmentSelection(files) }); setFiles([]); return result; }, 'پیوست‌ها ارسال شدند.');
     }}>ارسال پیوست</button>
     <h3>ایجاد ارتباط در Jira</h3><p>نوع ارتباط و تسک مقصد را بررسی کنید. ارتباط در هر دو تسک Jira قابل مشاهده است.</p>
     <div className="issue-link-form"><label>کلید مقصد<input value={target} onChange={(e) => setTarget(e.target.value.toUpperCase())} placeholder="PROJECT-123" /></label>
@@ -86,7 +107,8 @@ export default function JiraManagement({ details, snapshot, config, live, reload
     <><h3>پیوند ثبت‌های محصول</h3><p>ثبت‌های انتخاب‌شده به این issue متصل می‌شوند؛ Axiloom این ارتباط را در فضای محلی ثبت می‌کند و جزئیات آن را در قالب کامنت به Jira می‌فرستد.</p>
       <label className="form-field">جست‌وجوی ثبت محصولی<input value={recordOptionQuery} onChange={(event) => setRecordOptionQuery(event.target.value)} placeholder="عنوان یا جزئیات ثبت را بنویسید" /></label>
       <MultiSelect label="ثبت‌های مرتبط" value={recordIds} showSelectionChips options={recordOptions.map((record) => ({ value: record.id, label: `${({ objective: 'هدف', decision: 'تصمیم', meeting: 'جلسه', outcome: 'خروجی', request: 'درخواست', action: 'تعهد' } as Record<string, string>)[record.kind]} · ${record.title}` }))} onChange={setRecordIds} />
-      <button className="button primary" disabled={busy || !recordIds.length} onClick={() => { if (window.confirm('ارتباط این ثبت‌ها با issue و کامنت متناظر در Jira ثبت شود؟')) void perform(() => window.axiloom.linkJiraRecords({ key: details.key, recordIds }), 'پیوندهای ثبت محصول ذخیره شدند.'); }}>ثبت ارتباطات انتخاب‌شده</button></>
+      <button className="button primary" disabled={busy || !recordIds.length} onClick={() => { if (window.confirm('ارتباط این ثبت‌ها با issue و کامنت متناظر در Jira ثبت شود؟')) void linkSelectedRecords(); }}>ثبت ارتباطات انتخاب‌شده</button>
+      {recordLinkUnknown && <button className="button secondary" disabled={busy} onClick={() => void confirmRecordLinkRetry()}>I checked Jira; allow a new link attempt</button>}</>
     {related.length > 0 && <DataTable headers={['نوع', 'عنوان', 'شناسه', 'تعهد مرتبط']} rows={related.map((record) => [record.kind, record.title, record.id, <IssueKey value={details.key} onOpen={openIssue} />])} />}
     {deleteTarget && <div className="modal-backdrop jira-editor-backdrop"><section className="record-modal" role="dialog" aria-modal="true" aria-label="تأیید حذف دائمی"><h2>{deleteTarget.comment ? `حذف کامنت ${deleteTarget.comment.id}` : `حذف تسک ${details.key}`}</h2><p>این عملیات اطلاعات را از Jira حذف می‌کند و قابل بازگشت از این برنامه نیست.</p>{deleteTarget.comment && <pre className="jira-description">{typeof deleteTarget.comment.body === 'string' ? deleteTarget.comment.body : JSON.stringify(deleteTarget.comment.body)}</pre>}<label className="form-field">برای تأیید، عبارت <b dir="ltr">{deleteTarget.comment ? `${details.key}/${deleteTarget.comment.id}` : details.key}</b> را وارد کنید.<input autoFocus dir="ltr" value={deleteConfirmation} disabled={busy} onChange={(e) => setDeleteConfirmation(e.target.value)} /></label>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button className="button secondary" disabled={busy} onClick={() => setDeleteTarget(null)}>انصراف</button><button className="button primary" disabled={busy || deleteConfirmation !== (deleteTarget.comment ? `${details.key}/${deleteTarget.comment.id}` : details.key)} onClick={() => {
       if (!deleteTarget.comment) { void removeIssue(); return; }

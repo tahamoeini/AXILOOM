@@ -10,6 +10,25 @@ const { createOfflineAdapter, createProviderAdapter, describeProvider, parseJira
 const { writeWorkbook } = require('./xlsx.cjs');
 const { attachReportContext } = require('./reporting.cjs');
 const workspaceRegistry = require('./workspaces.cjs');
+const RESOURCE_LIMITS = require('../shared/resource-limits.json');
+
+function assertJsonPayloadSize(value, limit, label) {
+  let text;
+  try { text = JSON.stringify(value); }
+  catch { throw new Error(`${label} must be serializable JSON.`); }
+  if (Buffer.byteLength(text, 'utf8') > limit) throw new Error(`${label} exceeds its ${Math.ceil(limit / 1024 / 1024)} MB safety limit.`);
+}
+
+function validateImportBatch(batch, label) {
+  if (!Array.isArray(batch) || !batch.length || batch.length > RESOURCE_LIMITS.imports.maxBatchRecords) {
+    throw new Error(`${label} import batches must contain between 1 and ${RESOURCE_LIMITS.imports.maxBatchRecords} records.`);
+  }
+  assertJsonPayloadSize(batch, RESOURCE_LIMITS.imports.maxBatchBytes, `${label} import batch`);
+  for (const record of batch) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error(`${label} import records must be objects.`);
+    assertJsonPayloadSize(record, RESOURCE_LIMITS.imports.maxRecordBytes, `${label} import record`);
+  }
+}
 
 let db;
 let mainWindow;
@@ -102,8 +121,17 @@ function workspaceOperationsBusy() {
     || workspaceBackupWorkers.size || snapshotWorkers.size || snapshotFlights.size || dataAccessWorkers.size || dataAccessQueue.length);
 }
 
+function assertWorkspacePaths(info = activeWorkspace) {
+  const safe = workspaceRegistry.validateWorkspacePaths(workspaceRoot, info.folder);
+  if (path.resolve(safe.directory) !== path.resolve(info.directory) || path.resolve(safe.databaseFile) !== path.resolve(info.databaseFile)) {
+    throw new Error('Workspace paths changed after validation; close Axiloom and inspect the workspace directory before reopening it.');
+  }
+  return safe;
+}
+
 function openActiveWorkspace(info, registry) {
-  const nextDb = openDatabase(info.databaseFile);
+  const safePaths = workspaceRegistry.validateWorkspacePaths(workspaceRoot, info.folder);
+  const nextDb = openDatabase(safePaths.databaseFile);
   const nextConfig = getConfig(nextDb);
   if (nextConfig.workspaceName !== info.name) saveConfig(nextDb, { ...nextConfig, workspaceName: info.name }, 'workspace-name-synchronized');
   const oldDb = db;
@@ -202,11 +230,12 @@ function runDataAccessWorker(method, args = []) {
   });
 }
 
-function runWorkspaceDatabaseWorker(mode, filePath) {
+function runWorkspaceDatabaseWorker(mode, filePath, sourcePath = '') {
   if (workspaceMaintenance) return Promise.reject(new Error('فضای کاری در حال تعویض است؛ پس از راه‌اندازی دوباره تلاش کنید.'));
+  if (mode === 'backup') assertWorkspacePaths();
   return new Promise((resolve, reject) => {
     const worker = new Worker(path.join(__dirname, 'workspace-database-worker.cjs'), {
-      workerData: { mode, dbPath: mode === 'backup' ? databaseFile : filePath, targetPath: filePath },
+      workerData: { mode, dbPath: mode === 'backup' ? databaseFile : filePath, sourcePath, targetPath: filePath },
     });
     workspaceBackupWorkers.add(worker);
     let response = null;
@@ -304,9 +333,24 @@ function rememberPat(token, save) {
   return { connected: true, saved: Boolean(save) };
 }
 
-function forgetPat() {
+function clearPat() {
   sessionPat = '';
   db.prepare('DELETE FROM settings WHERE key=?').run('jira_pat_encrypted');
+}
+
+function stopSyncWorkerAndWait() {
+  const worker = syncWorker;
+  if (!worker) return Promise.resolve(false);
+  return new Promise((resolve, reject) => {
+    worker.once('exit', () => resolve(true));
+    try { worker.postMessage({ type: 'cancel' }); }
+    catch (error) { reject(error); }
+  });
+}
+
+async function forgetPat() {
+  await stopSyncWorkerAndWait();
+  clearPat();
   return { connected: false, saved: false };
 }
 
@@ -383,6 +427,7 @@ function registerHandlers() {
   });
   ipcMain.handle('app:snapshot', (_event, filters) => readSnapshotInWorker(filters));
   ipcMain.handle('issues:list', (_event, filters) => runDataAccessWorker('listIssues', [filters || {}]));
+  ipcMain.handle('issues:epic-report', (_event, filters) => runDataAccessWorker('getEpicReport', [filters || {}]));
   ipcMain.handle('records:list', (_event, filters) => runDataAccessWorker('listRecords', [filters || {}]));
   ipcMain.handle('records:link-summaries', (_event, ids) => runDataAccessWorker('getRecordLinkSummaries', [ids || []]));
   ipcMain.handle('issues:filter-options', (_event, project) => runDataAccessWorker('getIssueFilterOptions', [project || '']));
@@ -441,9 +486,17 @@ function registerHandlers() {
   });
   ipcMain.handle('import:register-file', (_event, meta) => {
     if (!activeImportRun) throw new Error('نشست import آغاز نشده است.');
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new Error('Import file metadata must be an object.');
+    if (!['issues', 'sprints', 'field-catalog', 'project-catalog', 'issue-type-catalog', 'field-metadata', 'create-metadata'].includes(meta.kind)) throw new Error('Import file type is not supported.');
+    const sizeBytes = Number(meta.sizeBytes);
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0 || sizeBytes > RESOURCE_LIMITS.imports.maxFileBytes) throw new Error('Import file size is invalid or exceeds the configured limit.');
+    assertJsonPayloadSize(meta.metadata || {}, RESOURCE_LIMITS.imports.maxMetadataBytes, 'Import metadata');
+    const registered = db.prepare('SELECT COUNT(*) AS count,COALESCE(SUM(size_bytes),0) AS bytes FROM import_files WHERE run_id=?').get(activeImportRun);
+    if (registered.count >= RESOURCE_LIMITS.imports.maxFiles) throw new Error(`An import run can register at most ${RESOURCE_LIMITS.imports.maxFiles} files.`);
+    if (Number(registered.bytes) + sizeBytes > RESOURCE_LIMITS.imports.maxTotalBytes) throw new Error('The total size of files in this import run exceeds the safety limit.');
     const now = new Date().toISOString();
     db.prepare('INSERT OR REPLACE INTO import_files(id,run_id,file_name,kind,size_bytes,metadata_json,imported_at) VALUES(?,?,?,?,?,?,?)')
-      .run(`${activeImportRun}:${meta.id || randomUUID()}`, activeImportRun, String(meta.fileName || 'JSON').slice(0, 260), meta.kind, Number(meta.sizeBytes) || null, JSON.stringify(meta.metadata || {}), now);
+      .run(`${activeImportRun}:${meta.id || randomUUID()}`, activeImportRun, String(meta.fileName || 'JSON').slice(0, 260), meta.kind, sizeBytes || null, JSON.stringify(meta.metadata || {}), now);
     if (String(meta.kind).includes('catalog') || String(meta.kind).includes('metadata')) require('./jira-metadata.cjs').cacheMetadata(db, `uploaded:${meta.kind}`, meta.metadata);
     const files = db.prepare('SELECT file_name FROM import_files WHERE run_id=? ORDER BY imported_at').all(activeImportRun).map((row) => row.file_name);
     db.prepare('UPDATE import_runs SET files_json=? WHERE id=?').run(JSON.stringify(Array.from(new Set(files))), activeImportRun);
@@ -452,6 +505,7 @@ function registerHandlers() {
   });
   ipcMain.handle('import:issue-batch', (_event, batch, source) => {
     if (!activeImportRun) throw new Error('نشست import آغاز نشده است.');
+    validateImportBatch(batch, 'Issue');
     const update = db.prepare('UPDATE import_runs SET issues_added=issues_added+?,issues_updated=issues_updated+?,duplicates=duplicates+?,conflicts=conflicts+?,skipped=skipped+? WHERE id=?');
     let added = 0; let updated = 0; let duplicates = 0; let conflicts = 0; let skipped = 0;
     db.exec('BEGIN IMMEDIATE');
@@ -474,6 +528,7 @@ function registerHandlers() {
   });
   ipcMain.handle('import:sprint-batch', (_event, batch, source) => {
     if (!activeImportRun) throw new Error('نشست import آغاز نشده است.');
+    validateImportBatch(batch, 'Sprint');
     let added = 0; let updated = 0; let duplicates = 0; let conflicts = 0; let skipped = 0;
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -504,6 +559,7 @@ function registerHandlers() {
   });
 
   ipcMain.handle('records:save', (_event, input) => {
+    assertJsonPayloadSize(input, RESOURCE_LIMITS.imports.maxRecordBytes, 'Product record');
     const record = safeRecord(input, getConfig(db));
     if (['request', 'action'].includes(record.kind)) throw new Error('درخواست و تعهد جدید باید به‌صورت تسک واقعی در Jira ایجاد شوند.');
     const id = input.id || randomUUID();
@@ -569,6 +625,7 @@ function registerHandlers() {
   });
 
   ipcMain.handle('workspace:backup', async () => {
+    assertWorkspacePaths();
     if (activeImportRun || syncWorker || workspaceBackupInProgress) throw new Error('هنگام import یا همگام‌سازی Jira پشتیبان نگیرید؛ پس از پایان دوباره تلاش کنید.');
     const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, { title: 'پشتیبان فضای Axiloom', defaultPath: `Axiloom-${new Date().toISOString().slice(0, 10)}.axw`, filters: [{ name: 'Axiloom Workspace', extensions: ['axw'] }] });
     if (canceled || !filePath) return { canceled: true };
@@ -597,11 +654,16 @@ function registerHandlers() {
     } finally { workspaceBackupInProgress = false; }
   });
   ipcMain.handle('workspace:restore', async () => {
+    assertWorkspacePaths();
     const busy = () => workspaceMaintenance || activeImportRun || syncWorker || workspaceBackupInProgress || workspaceBackupWorkers.size || snapshotWorkers.size || snapshotFlights.size || dataAccessWorkers.size || dataAccessQueue.length;
     if (busy()) throw new Error('برای بازیابی، صبر کنید تا import، همگام‌سازی و خواندن داده‌ها تمام شود.');
     const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, { title: 'بازیابی فضای Axiloom', properties: ['openFile'], filters: [{ name: 'Axiloom Workspace', extensions: ['axw', 'sqlite', 'db'] }] });
     if (canceled || !filePaths[0]) return { canceled: true };
-    const source = filePaths[0];
+    const selectedSource = filePaths[0];
+    const source = fs.realpathSync(selectedSource);
+    const sourceStats = fs.statSync(source);
+    if (!sourceStats.isFile() || sourceStats.nlink > 1) throw new Error('Choose a regular workspace file that is not hard-linked to another path.');
+    if (sourceStats.size > RESOURCE_LIMITS.workspace.maxRestoreBytes) throw new Error(`Workspace restore files must be at most ${RESOURCE_LIMITS.workspace.maxRestoreBytes / 1024 / 1024 / 1024} GB.`);
     const sourceHandle = fs.openSync(source, 'r');
     const headerBytes = Buffer.alloc(16);
     try { fs.readSync(sourceHandle, headerBytes, 0, headerBytes.length, 0); }
@@ -609,7 +671,8 @@ function registerHandlers() {
     if (headerBytes.toString('ascii') !== 'SQLite format 3\u0000') throw new Error('فایل انتخاب‌شده پایگاه دادهٔ SQLite معتبر نیست.');
     const tempPath = path.join(workspaceDirectory, `workspace.restore-${randomUUID()}.sqlite`);
     try {
-      await fs.promises.copyFile(source, tempPath);
+      await runWorkspaceDatabaseWorker('restore-snapshot', tempPath, source);
+      if (fs.statSync(tempPath).size > RESOURCE_LIMITS.workspace.maxRestoreBytes) throw new Error('The SQLite-consistent restore snapshot exceeds the workspace size safety limit.');
       await runWorkspaceDatabaseWorker('validate', tempPath);
     } catch (error) {
       for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${tempPath}${suffix}`, { force: true });
@@ -701,10 +764,13 @@ function registerHandlers() {
       expiresAt: String(item.expirationTime || item.expiresAt || ''),
     }));
   });
-  ipcMain.handle('jira:revoke-pat', async (_event, tokenId) => {
-    if (!/^\d+$/.test(String(tokenId))) throw new Error('شناسهٔ PAT معتبر نیست.');
+  ipcMain.handle('jira:revoke-pat', async (_event, input) => {
+    const tokenId = String(input?.tokenId ?? '');
+    if (!/^\d+$/.test(tokenId)) throw new Error('شناسهٔ PAT معتبر نیست.');
+    if (input?.confirmation !== tokenId) throw new Error('Confirm the exact Jira token ID before revoking it.');
+    await stopSyncWorkerAndWait();
     await jiraFetch(`rest/pat/latest/tokens/${encodeURIComponent(tokenId)}`, { method: 'DELETE' }, savedPat());
-    forgetPat();
+    clearPat();
     return { revoked: true };
   });
   ipcMain.handle('jira:test', async () => {
@@ -743,7 +809,6 @@ function registerHandlers() {
         terminalMessageReceived = true;
         invalidateSnapshot();
         mainWindow?.webContents.send('jira:progress', { phase: message.type, ...(message.value || {}), error: message.error || '' });
-        if (syncWorker === worker) syncWorker = null;
       }
     });
     worker.on('error', (error) => {
@@ -752,7 +817,6 @@ function registerHandlers() {
         invalidateSnapshot();
         mainWindow?.webContents.send('jira:progress', { phase: 'error', error: error.message });
       }
-      if (syncWorker === worker) syncWorker = null;
     });
     worker.on('exit', (code) => {
       if (!terminalMessageReceived) {
@@ -827,6 +891,7 @@ activeWorkspace = workspaceRegistry.activeWorkspace(workspaceRoot, workspaceInde
 workspaceDirectory = activeWorkspace.directory;
 databaseFile = activeWorkspace.databaseFile;
 app.whenReady().then(() => {
+  assertWorkspacePaths();
   db = openDatabase(databaseFile);
   registerHandlers();
   createWindow();

@@ -31,6 +31,10 @@ const EVIDENCE_ROWS = [
   { table: 'local_issue_link_events', keys: ['id'], fields: ['link_id', 'event_type', 'occurred_at', 'payload_json'] },
 ];
 
+export function assertSingleLink(stat, label = 'Source workspace') {
+  if (Number(stat?.nlink || 0) > 1) throw new Error(`${label} must not be hard-linked; WAL sidecars are resolved from its canonical file path.`);
+}
+
 function quoteIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
@@ -166,12 +170,16 @@ function removeSqliteFiles(filePath) {
 
 export async function migrateWorkspace({ sourcePath, destinationPath, dryRun = false }) {
   if (!sourcePath || !destinationPath) throw new Error('Provide both --source and --destination paths.');
-  const source = path.resolve(sourcePath);
+  const suppliedSource = path.resolve(sourcePath);
+  if (!fs.existsSync(suppliedSource)) throw new Error('Source workspace file does not exist or is not a regular file.');
+  const source = fs.realpathSync(suppliedSource);
   const destination = path.resolve(destinationPath);
   if ((process.platform === 'win32' && source.toLowerCase() === destination.toLowerCase()) || source === destination) {
     throw new Error('Source and destination must be different files.');
   }
-  if (!fs.existsSync(source) || !fs.statSync(source).isFile()) throw new Error('Source workspace file does not exist or is not a regular file.');
+  const sourceStats = fs.statSync(source);
+  if (!sourceStats.isFile()) throw new Error('Source workspace file does not exist or is not a regular file.');
+  assertSingleLink(sourceStats);
   const sourceHandle = fs.openSync(source, 'r');
   try {
     const header = Buffer.alloc(16);

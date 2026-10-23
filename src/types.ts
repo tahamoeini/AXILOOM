@@ -107,6 +107,14 @@ export interface IssueListResult {
   offset: number; limit: number; hasMore: boolean;
 }
 
+export interface EpicReportResult {
+  items: Array<Record<string, any>>;
+  total: number; offset: number; limit: number; hasMore: boolean;
+  summary: { total: number; done: number; totalSP: number; doneSP: number; adhocCount: number; adhocDoneCount: number; adhocSP: number; adhocDoneSP: number; withoutSP: number };
+  projects: Array<{ project: string; count: number; done: number; points: number; donePoints: number; adhocCount: number; adhocPoints: number }>;
+  teams: Array<{ team: string; count: number; done: number; points: number; donePoints: number }>;
+}
+
 export interface IssueFilterOptions {
   projects: string[]; issueTypes: string[]; statuses: string[]; priorities: string[]; components: string[];
   epics: Array<{ key: string; summary: string }>;
@@ -279,10 +287,11 @@ export interface AxiloomApi {
   getJiraUsers: (input: { key?: string; project?: string; query: string; fieldId?: string }) => Promise<any[]>;
   getJiraLinkTypes: () => Promise<{ issueLinkTypes: any[] }>;
   linkJiraIssue: (input: { key: string; target: string; typeId: string }) => Promise<{ ok: boolean; warning?: string }>;
-  linkJiraRecords: (input: { key: string; recordIds: string[] }) => Promise<{ ok: boolean }>;
+  linkJiraRecords: (input: { key: string; recordIds: string[] }) => Promise<{ ok: boolean; warning?: string }>;
 
   getSnapshot: (filters?: Record<string, unknown>) => Promise<Snapshot>;
   listIssues: (filters?: IssueListFilters) => Promise<IssueListResult>;
+  getEpicReport: (filters: { epic: string; adhocTag?: string; offset?: number; limit?: number }) => Promise<EpicReportResult>;
   listRecords: (filters?: { kind?: string; kinds?: string[]; query?: string; status?: string; ids?: string[]; relatedIssueKey?: string; offset?: number; limit?: number; includeHistory?: boolean }) => Promise<ProductRecordListResult>;
   getRecordLinkSummaries: (ids: string[]) => Promise<Array<Record<string, any>>>;
   getIssueFilterOptions: (project?: string) => Promise<IssueFilterOptions>;
@@ -331,7 +340,9 @@ export interface AxiloomApi {
   forgetPat: () => Promise<{ connected: boolean; saved: boolean }>;
   createPat: (username: string, password: string, name: string, expiryDays: number, save: boolean) => Promise<{ created: boolean; token: string | null; metadata: Record<string, string>; saved: { connected: boolean; saved: boolean } }>;
   listPats: () => Promise<Array<{ id: string; name: string; createdAt: string; expiresAt: string }>>;
-  revokePat: (tokenId: string) => Promise<{ revoked: boolean }>;
+  revokePat: (input: { tokenId: string; confirmation: string }) => Promise<{ revoked: boolean }>;
+  confirmCreateJiraRetry: (confirmation: string) => Promise<{ cleared: boolean }>;
+  confirmJiraRecordLinkRetry: (input: { key: string; recordIds: string[]; confirmation: string }) => Promise<{ cleared: boolean }>;
   testJira: () => Promise<{ ok: boolean; displayName: string; account: string }>;
   startSync: (resume: boolean) => Promise<{ started: boolean }>;
   cancelSync: () => Promise<{ requested: boolean }>;

@@ -10,11 +10,58 @@ function safeName(value) {
   return name;
 }
 
+function isWithin(root, target) {
+  const relative = path.relative(root, target);
+  return !relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function canonicalRoot(root) {
+  return fs.realpathSync(path.resolve(root));
+}
+
+function assertNoLinkedPath(root, target, label) {
+  const absoluteRoot = canonicalRoot(root);
+  if (!isWithin(absoluteRoot, path.resolve(target))) throw new Error(`${label} is outside the local workspace root.`);
+  const relative = path.relative(absoluteRoot, path.resolve(target));
+  let current = absoluteRoot;
+  for (const component of relative ? relative.split(path.sep) : []) {
+    current = path.join(current, component);
+    let stat;
+    try { stat = fs.lstatSync(current); }
+    catch (error) {
+      if (error.code === 'ENOENT') break;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) throw new Error(`${label} cannot pass through a symbolic link or junction.`);
+    const actual = fs.realpathSync(current);
+    if (!isWithin(absoluteRoot, actual)) throw new Error(`${label} resolves outside the local workspace root.`);
+  }
+}
+
 function resolveFolder(root, folder) {
-  const absoluteRoot = path.resolve(root);
+  const absoluteRoot = canonicalRoot(root);
   const absolute = path.resolve(absoluteRoot, folder);
-  if (absolute !== absoluteRoot && !absolute.startsWith(`${absoluteRoot}${path.sep}`)) throw new Error('Workspace registry contains a path outside the local workspace root.');
+  if (!isWithin(absoluteRoot, absolute)) throw new Error('Workspace registry contains a path outside the local workspace root.');
+  assertNoLinkedPath(absoluteRoot, absolute, 'Workspace directory');
   return absolute;
+}
+
+function validateWorkspacePaths(root, folder) {
+  const directory = resolveFolder(root, folder);
+  const databaseFile = path.join(directory, 'workspace.sqlite');
+  assertNoLinkedPath(root, databaseFile, 'Workspace database');
+  try {
+    const stat = fs.statSync(databaseFile);
+    if (!stat.isFile()) throw new Error('Workspace database path is not a regular file.');
+    assertSingleLink(stat, 'Workspace database');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  return { directory, databaseFile };
+}
+
+function assertSingleLink(stat, label) {
+  if (Number(stat?.nlink || 0) > 1) throw new Error(`${label} cannot be hard-linked to another path.`);
 }
 
 function saveRegistry(root, registry) {
@@ -49,8 +96,8 @@ function loadRegistry(root) {
 
 function activeWorkspace(root, registry = loadRegistry(root)) {
   const workspace = registry.workspaces.find((item) => item.id === registry.activeId);
-  const directory = resolveFolder(root, workspace.folder);
-  return { ...workspace, directory, databaseFile: path.join(directory, 'workspace.sqlite') };
+  const { directory, databaseFile } = validateWorkspacePaths(root, workspace.folder);
+  return { ...workspace, directory, databaseFile };
 }
 
 function addWorkspace(root, registry, requestedName) {
@@ -61,6 +108,7 @@ function addWorkspace(root, registry, requestedName) {
   const directory = resolveFolder(root, folder);
   fs.mkdirSync(path.dirname(directory), { recursive: true });
   fs.mkdirSync(directory, { recursive: false });
+  validateWorkspacePaths(root, folder);
   const entry = { id, name, folder, createdAt: new Date().toISOString() };
   const next = { ...registry, workspaces: [...registry.workspaces, entry], activeId: id };
   return { registry: next, workspace: { ...entry, directory, databaseFile: path.join(directory, 'workspace.sqlite') } };
@@ -81,4 +129,4 @@ function describeRegistry(root, registry = loadRegistry(root)) {
   }));
 }
 
-module.exports = { REGISTRY_FILE, safeName, resolveFolder, saveRegistry, loadRegistry, activeWorkspace, addWorkspace, activateWorkspace, describeRegistry };
+module.exports = { REGISTRY_FILE, safeName, resolveFolder, validateWorkspacePaths, assertSingleLink, saveRegistry, loadRegistry, activeWorkspace, addWorkspace, activateWorkspace, describeRegistry };

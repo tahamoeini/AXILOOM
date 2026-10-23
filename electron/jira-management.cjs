@@ -1,6 +1,49 @@
 // Jira mutations stay in the main process and are validated against live permissions.
+const { createHash, randomBytes } = require('node:crypto');
 const { getConfig } = require('./database.cjs');
 const { cacheMetadata, readMetadata, discoverMetadata, createMetadata, projectKey } = require('./jira-metadata.cjs');
+const { createPageBudget } = require('./jira-page-budget.cjs');
+const LIMITS = require('../shared/resource-limits.json');
+const CREATE_PENDING_KEY = 'jira:write:create-issue:pending';
+const RECORD_LINK_PENDING_PREFIX = 'jira:write:record-link:';
+
+function attachmentSize(input) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > LIMITS.attachments.maxFiles) throw new Error(`Select between 1 and ${LIMITS.attachments.maxFiles} attachment files.`);
+  let total = 0;
+  for (const file of input) {
+    if (!file?.name || String(file.name).length > LIMITS.attachments.maxFileNameCharacters
+      || !Array.isArray(file.bytes) && !(file.bytes instanceof Uint8Array)) throw new Error('Attachment file is invalid.');
+    const size = file.bytes.byteLength ?? file.bytes.length;
+    if (!Number.isSafeInteger(size) || size < 0) throw new Error('Attachment size is invalid.');
+    if (size > LIMITS.attachments.maxFileBytes) throw new Error(`Each attachment must be at most ${LIMITS.attachments.maxFileBytes / 1024 / 1024} MB.`);
+    total += size;
+    if (total > LIMITS.attachments.maxTotalBytes) throw new Error(`Attachments together must be at most ${LIMITS.attachments.maxTotalBytes / 1024 / 1024} MB.`);
+  }
+  return total;
+}
+
+function multipartFiles(files) {
+  const boundary = `----Axiloom${randomBytes(24).toString('hex')}`;
+  const chunks = [];
+  for (const file of files) {
+    const name = String(file.name).replace(/[\u0000-\u001f\u007f/\\";]/g, '_').slice(0, LIMITS.attachments.maxFileNameCharacters);
+    const asciiName = name.replace(/[^\x20-\x7E]/g, '_');
+    const encodedName = encodeURIComponent(name).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+    const disposition = `Content-Disposition: form-data; name="file"; filename="${asciiName}"; filename*=UTF-8''${encodedName}`;
+    const type = /^[\w.+-]+\/[\w.+-]+$/.test(String(file.type || '')) ? file.type : 'application/octet-stream';
+    chunks.push(Buffer.from(`--${boundary}\r\n${disposition}\r\nContent-Type: ${type}\r\n\r\n`, 'utf8'));
+    chunks.push(Buffer.from(file.bytes));
+    chunks.push(Buffer.from('\r\n'));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return { boundary, body: Buffer.concat(chunks) };
+}
+
+function hasCommentMarker(comment, marker) {
+  const body = comment?.body;
+  return typeof body === 'string' ? body.includes(marker) : JSON.stringify(body ?? '').includes(marker);
+}
+
 function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, getIssueDetails, invalidateSnapshot }) {
   const locked = new Set();
   const keyOf = (value) => {
@@ -28,6 +71,9 @@ function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, g
   async function readIssue(key, includeActivity = false) {
     const expand = includeActivity ? 'names,schema,changelog,renderedFields' : 'names,schema,renderedFields';
     const issue = await request(`rest/api/2/issue/${key}?fields=*all&expand=${expand}`);
+    if (!issue || typeof issue !== 'object' || Array.isArray(issue) || !issue.fields || typeof issue.fields !== 'object' || Array.isArray(issue.fields)) {
+      throw new Error('Jira returned an invalid issue response.');
+    }
     if (!includeActivity) {
       // A normal refresh reads only the current issue. Preserve cached history and
       // activity until the user explicitly asks for the complete Jira activity.
@@ -35,34 +81,61 @@ function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, g
       delete issue.fields.comment;
       delete issue.fields.worklog;
     } else {
-      const histories = [...(issue.changelog?.histories || [])];
+      const budget = createPageBudget('Full Jira activity', {
+        maxPages: LIMITS.jira.maxActivityPages,
+        maxItems: LIMITS.jira.maxActivityItems,
+        maxBytes: LIMITS.jira.maxActivityBytes,
+      });
+      budget.consume(issue);
+      const initialHistories = issue.changelog?.histories ?? [];
+      if (!Array.isArray(initialHistories)) throw new Error('Jira changelog was invalid.');
+      const histories = [...initialHistories];
       let total = Number(issue.changelog?.total || histories.length);
+      if (!Number.isSafeInteger(total) || total < histories.length) throw new Error('Jira changelog total was invalid.');
       while (histories.length < total) {
         const page = await request(`rest/api/2/issue/${key}/changelog?startAt=${histories.length}&maxResults=100`);
+        if (!page || typeof page !== 'object' || Array.isArray(page)) throw new Error('Jira changelog page was invalid.');
         const items = page.values || page.histories || [];
+        if (!Array.isArray(items) || items.length > 100) throw new Error('Jira changelog page was invalid or exceeded the requested page size.');
+        budget.consume(page, items.length);
         if (!items.length) throw new Error('دریافت تاریخچه کامل نشد؛ دوباره بازخوانی کنید.');
         histories.push(...items);
         total = Number(page.total ?? total);
+        if (!Number.isSafeInteger(total) || total < histories.length) throw new Error('Jira changelog total was invalid.');
       }
       issue.changelog = { startAt: 0, total, histories };
       const comments = [];
       let startAt = 0;
       for (;;) {
         const page = await request(`rest/api/2/issue/${key}/comment?startAt=${startAt}&maxResults=100`);
+        if (!page || typeof page !== 'object' || Array.isArray(page)) throw new Error('Jira comment page was invalid.');
         const items = page.comments || [];
+        if (!Array.isArray(items) || items.length > 100) throw new Error('Jira comment page was invalid or exceeded the requested page size.');
+        budget.consume(page, items.length);
         comments.push(...items);
         startAt += items.length;
-        if (startAt >= Number(page.total || 0)) break;
+        const reportedTotal = Number(page.total ?? startAt);
+        if (!Number.isSafeInteger(reportedTotal) || reportedTotal < startAt) throw new Error('Jira comment page total was invalid.');
+        if (startAt >= reportedTotal) break;
         if (!items.length) throw new Error('دریافت کامنت‌ها کامل نشد.');
       }
       issue.fields.comment = { comments, total: Number(issue.fields.comment?.total || comments.length) };
       const worklog = issue.fields.worklog;
+      if (worklog && (typeof worklog !== 'object' || Array.isArray(worklog) || worklog.worklogs !== undefined && !Array.isArray(worklog.worklogs))) {
+        throw new Error('Jira worklog response was invalid.');
+      }
       if (worklog && (Number(worklog.startAt || 0) > 0 || Number(worklog.total || 0) > (worklog.worklogs || []).length)) {
         const worklogs = []; let offset = 0;
         for (;;) {
           const page = await request(`rest/api/2/issue/${key}/worklog?startAt=${offset}&maxResults=100`);
-          const items = page.worklogs || []; worklogs.push(...items); offset += items.length;
-          if (offset >= Number(page.total || 0)) break;
+          if (!page || typeof page !== 'object' || Array.isArray(page)) throw new Error('Jira worklog page was invalid.');
+          const items = page.worklogs || [];
+          if (!Array.isArray(items) || items.length > 100) throw new Error('Jira worklog page was invalid or exceeded the requested page size.');
+          budget.consume(page, items.length);
+          worklogs.push(...items); offset += items.length;
+          const reportedTotal = Number(page.total ?? offset);
+          if (!Number.isSafeInteger(reportedTotal) || reportedTotal < offset) throw new Error('Jira worklog page total was invalid.');
+          if (offset >= reportedTotal) break;
           if (!items.length) throw new Error('دریافت ریزکارکرد کامل نشد.');
         }
         issue.fields.worklog = { ...worklog, startAt: 0, total: Number(worklog.total || worklogs.length), worklogs };
@@ -77,6 +150,28 @@ function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, g
     if (!expected) throw new Error('پیش از تغییر، نسخهٔ تازهٔ تسک را دریافت کنید.');
     const current = await request(`rest/api/2/issue/${key}?fields=updated`);
     if (current.fields?.updated !== expected) throw new Error('تسک در Jira تغییر کرده است؛ بازخوانی کنید و تغییرات را دوباره بررسی کنید.');
+  }
+  async function hasJiraComment(key, marker) {
+    const budget = createPageBudget('Jira record-link reconciliation', {
+      maxPages: LIMITS.jira.maxActivityPages,
+      maxItems: LIMITS.jira.maxActivityItems,
+      maxBytes: LIMITS.jira.maxActivityBytes,
+    });
+    let startAt = 0;
+    for (;;) {
+      const page = await request(`rest/api/2/issue/${key}/comment?startAt=${startAt}&maxResults=100`);
+      if (!page || typeof page !== 'object' || Array.isArray(page)) throw new Error('Jira comment page was invalid.');
+      const comments = page.comments || [];
+      if (!Array.isArray(comments) || comments.length > 100) throw new Error('Jira comment page was invalid or exceeded the requested page size.');
+      budget.consume(page, comments.length);
+      if (comments.some((comment) => hasCommentMarker(comment, marker))) return true;
+      const next = startAt + comments.length;
+      const total = Number(page.total ?? next);
+      if (!Number.isSafeInteger(total) || total < next) throw new Error('Jira comment page total was invalid.');
+      if (next >= total) return false;
+      if (!comments.length) throw new Error('Jira comment history could not be checked to completion; retry is blocked to avoid duplicate comments.');
+      startAt = next;
+    }
   }
   function validateFields(fields, metadata, creating = false) {
     if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new Error('فیلدها معتبر نیستند.');
@@ -146,19 +241,15 @@ function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, g
     const key = keyOf(input.key);
     const meta = await request(`rest/api/2/issue/${key}/editmeta`);
     if (!meta.fields?.attachment) throw new Error('پیوست در فرم این تسک در دسترس نیست.');
-    if (!Array.isArray(input.files) || !input.files.length) throw new Error('فایلی انتخاب نشده است.');
-    const form = new FormData();
-    for (const file of input.files) {
-      if (!file.name || !Array.isArray(file.bytes) && !(file.bytes instanceof Uint8Array)) throw new Error('فایل معتبر نیست.');
-      form.append('file', new Blob([new Uint8Array(file.bytes)], { type: file.type || 'application/octet-stream' }), String(file.name).replace(/[\\/]/g, '_'));
-    }
-    await request(`rest/api/2/issue/${key}/attachments`, { method: 'POST', headers: { 'X-Atlassian-Token': 'no-check' }, body: form });
+    attachmentSize(input.files);
+    const { boundary, body } = multipartFiles(input.files);
+    await request(`rest/api/2/issue/${key}/attachments`, { method: 'POST', headers: { 'X-Atlassian-Token': 'no-check', 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(body.byteLength) }, body });
     return refreshed(key, 'پیوست ارسال شد');
   }));
   ipcMain.handle('jira:live-issue', (_event, value, includeActivity = false) => exclusive(keyOf(value), async () => {
     const key = keyOf(value);
     await readIssue(key, Boolean(includeActivity));
-    return getIssueDetails(db, key, Boolean(includeActivity));
+    return getIssueDetails(db, key, false);
   }));
   ipcMain.handle('jira:edit-meta', async (_event, key) => {
     key = keyOf(key);
@@ -184,10 +275,45 @@ function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, g
       if (field.required && !field.hasDefaultValue && fields[id] == null) throw new Error(`فیلد ${field.name} ضروری است.`);
     }
     if (type.subtask && !fields.parent?.key) throw new Error('برای زیرتسک، تسک والد را انتخاب کنید.');
-    const created = await request('rest/api/2/issue', json('POST', { fields }));
+    const operationId = createHash('sha256').update(JSON.stringify({ project, issueType: type.id, fields })).digest('hex').slice(0, 20);
+    const pendingCreate = db.prepare('SELECT value_json FROM settings WHERE key=?').get(CREATE_PENDING_KEY);
+    if (pendingCreate) {
+      let previous = {};
+      try { previous = JSON.parse(pendingCreate.value_json); } catch { /* Keep malformed state blocking until manually cleared. */ }
+      throw new Error(`A previous Jira issue creation has an uncertain outcome${previous.operationId ? ` (${previous.operationId})` : ''}. Check Jira and explicitly confirm that no issue was created before retrying.`);
+    }
+    db.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)').run(CREATE_PENDING_KEY, JSON.stringify({ operationId, startedAt: new Date().toISOString() }), new Date().toISOString());
+    let created;
+    try {
+      created = await request('rest/api/2/issue', json('POST', { fields }));
+      if (!created?.key || !/^[A-Z][A-Z0-9_]*-\d+$/.test(String(created.key))) throw new Error('Jira accepted the request but did not return a valid issue key.');
+      db.prepare('DELETE FROM settings WHERE key=?').run(CREATE_PENDING_KEY);
+    } catch (error) {
+      const definiteRejection = /^Jira \(4\d\d\)/.test(String(error?.message || ''));
+      if (definiteRejection) db.prepare('DELETE FROM settings WHERE key=?').run(CREATE_PENDING_KEY);
+      else db.prepare('UPDATE settings SET value_json=?,updated_at=? WHERE key=?')
+        .run(JSON.stringify({ operationId, startedAt: new Date().toISOString(), outcome: 'unknown' }), new Date().toISOString(), CREATE_PENDING_KEY);
+      if (!definiteRejection) throw new Error(`Jira issue creation outcome is unknown (${operationId}). Check Jira before retrying. ${error.message}`);
+      throw error;
+    }
     try { await readIssue(created.key); return { key: created.key }; }
     catch (error) { return { key: created.key, warning: `تسک ایجاد شد، اما بازخوانی کامل نشد: ${error.message}` }; }
   }));
+  ipcMain.handle('jira:confirm-create-retry', (_event, confirmation) => {
+    if (confirmation !== 'I checked Jira and no issue was created') throw new Error('Confirm that you checked Jira and found no issue before allowing another create request.');
+    db.prepare('DELETE FROM settings WHERE key=?').run(CREATE_PENDING_KEY);
+    return { cleared: true };
+  });
+  ipcMain.handle('jira:confirm-record-link-retry', (_event, input) => {
+    const key = keyOf(input?.key);
+    if (!Array.isArray(input.recordIds) || input.recordIds.length > 100) throw new Error('Select at most 100 product records for one Jira link operation.');
+    const ids = [...new Set(input.recordIds.map((id) => String(id)))];
+    if (ids.some((id) => !id || id.length > 160)) throw new Error('A product record identifier is invalid.');
+    if (input.confirmation !== 'I checked Jira and no matching Axiloom reference exists') throw new Error('Check Jira for the matching Axiloom reference marker before allowing a retry.');
+    const operationId = createHash('sha256').update(`${key}\u0000${[...ids].sort().join('\u0000')}`).digest('hex').slice(0, 20);
+    db.prepare('DELETE FROM settings WHERE key=?').run(`${RECORD_LINK_PENDING_PREFIX}${operationId}`);
+    return { cleared: true };
+  });
   ipcMain.handle('jira:update-issue', (_event, input) => exclusive(keyOf(input?.key), async () => {
     const key = keyOf(input.key);
     const meta = await request(`rest/api/2/issue/${key}/editmeta`);
@@ -259,10 +385,17 @@ function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, g
       const routes = config.boardRoutes || [];
       const options = [];
       for (const route of routes) {
+        const budget = createPageBudget('Jira sprint field options', {
+          maxPages: LIMITS.jira.maxMetadataPages,
+          maxItems: LIMITS.jira.maxMetadataItems,
+          maxBytes: LIMITS.jira.maxMetadataBytes,
+        });
         let startAt = 0;
         for (;;) {
           const page = await request(`rest/agile/1.0/board/${encodeURIComponent(route.boardId)}/sprint?state=active,future&startAt=${startAt}&maxResults=50`);
           const values = page.values || [];
+          if (!Array.isArray(values) || values.length > 50) throw new Error('Jira sprint option page was invalid or exceeded the requested page size.');
+          budget.consume(page, values.length);
           options.push(...values.map((sprint) => ({ id: String(sprint.id), name: sprint.name, label: `${sprint.name} · ${route.team}`, boardId: route.boardId })));
           startAt += values.length;
           if (page.isLast || Number.isFinite(Number(page.total)) && startAt >= Number(page.total) || !values.length) break;
@@ -302,15 +435,40 @@ function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, g
   ipcMain.handle('jira:link-records', (_event, input) => exclusive(keyOf(input?.key), async () => {
     const key = keyOf(input.key);
     await request(`rest/api/2/issue/${key}?fields=project`);
-    const ids = [...new Set(input.recordIds || [])];
+    if (!Array.isArray(input.recordIds) || input.recordIds.length > 100) throw new Error('Select at most 100 product records for one Jira link operation.');
+    const ids = [...new Set(input.recordIds.map((id) => String(id)))];
+    if (ids.some((id) => !id || id.length > 160)) throw new Error('A product record identifier is invalid.');
     const records = ids.map((id) => db.prepare('SELECT * FROM product_records WHERE id=? AND archived_at IS NULL').get(String(id)));
     if (records.some((record) => !record || !['decision', 'meeting', 'outcome', 'request', 'action'].includes(record.kind))) throw new Error('ثبت مرتبط معتبر نیست.');
     const fresh = records.filter((record) => {
       const payload = JSON.parse(record.payload_json);
       return !(payload.relatedIssueKeys || payload.linkedIssueKeys || []).includes(key);
     });
-    if (!fresh.length) return { ok: true };
-    await request(`rest/api/2/issue/${key}/comment`, json('POST', { body: `ارتباطات Axiloom:\n${fresh.map((record) => `${record.kind} | ${record.title} | ${record.id}`).join('\n')}` }));
+    const operationId = createHash('sha256').update(`${key}\u0000${[...ids].sort().join('\u0000')}`).digest('hex').slice(0, 20);
+    const pendingKey = `${RECORD_LINK_PENDING_PREFIX}${operationId}`;
+    if (!fresh.length) {
+      db.prepare('DELETE FROM settings WHERE key=?').run(pendingKey);
+      return { ok: true };
+    }
+    const marker = `[Axiloom reference:${operationId}]`;
+    const pending = db.prepare('SELECT value_json FROM settings WHERE key=?').get(pendingKey);
+    const alreadyPosted = await hasJiraComment(key, marker);
+    if (!alreadyPosted && pending) throw new Error(`Jira record-link comment outcome is still unknown (${operationId}); Axiloom did not send another comment. Check Jira and confirm no matching marker exists before retrying.`);
+    if (!alreadyPosted) {
+      db.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)').run(pendingKey, JSON.stringify({ operationId, state: 'pending', startedAt: new Date().toISOString() }), new Date().toISOString());
+      const body = `ارتباطات Axiloom ${marker}:\n${fresh.map((record) => `${record.kind} | ${record.title} | ${record.id}`).join('\n')}`;
+      try {
+        await request(`rest/api/2/issue/${key}/comment`, json('POST', { body }));
+        db.prepare('UPDATE settings SET value_json=?,updated_at=? WHERE key=?').run(JSON.stringify({ operationId, state: 'posted', startedAt: new Date().toISOString() }), new Date().toISOString(), pendingKey);
+      } catch (error) {
+        const definiteRejection = /^Jira \(4\d\d\)/.test(String(error?.message || ''));
+        if (definiteRejection) db.prepare('DELETE FROM settings WHERE key=?').run(pendingKey);
+        else db.prepare('UPDATE settings SET value_json=?,updated_at=? WHERE key=?')
+          .run(JSON.stringify({ operationId, state: 'unknown', startedAt: new Date().toISOString() }), new Date().toISOString(), pendingKey);
+        if (!definiteRejection) throw new Error(`Jira record-link comment outcome is unknown (${operationId}). Axiloom will check for the reference marker before another attempt. ${error.message}`);
+        throw error;
+      }
+    }
     db.exec('BEGIN IMMEDIATE');
     try {
       for (const record of fresh) {
@@ -320,9 +478,10 @@ function registerJiraManagement({ ipcMain, db, jiraFetch, savedPat, saveIssue, g
         db.prepare('UPDATE product_records SET payload_json=?,updated_at=? WHERE id=?').run(JSON.stringify(after), now, record.id);
         db.prepare('INSERT INTO record_events(record_id,event_type,occurred_at,payload_json) VALUES(?,?,?,?)').run(record.id, 'linked', now, JSON.stringify({ before, after, jiraKey: key }));
       }
+      db.prepare('DELETE FROM settings WHERE key=?').run(pendingKey);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     return { ok: true };
   }));
 }
-module.exports = { registerJiraManagement };
+module.exports = { attachmentSize, multipartFiles, registerJiraManagement };

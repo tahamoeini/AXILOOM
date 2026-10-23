@@ -3,8 +3,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { Worker } from 'node:worker_threads';
 import workspaces from '../electron/workspaces.cjs';
 import database from '../electron/database.cjs';
+
+function runWorkspaceWorker(mode, paths) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('../electron/workspace-database-worker.cjs', import.meta.url), { workerData: { mode, ...paths } });
+    let result;
+    let messageError;
+    worker.once('message', (message) => { if (message.ok) result = message; else messageError = new Error(message.error || 'Workspace database worker failed.'); });
+    worker.once('error', reject);
+    worker.once('exit', (code) => {
+      if (code !== 0) reject(new Error(`Workspace database worker exited with code ${code}.`));
+      else if (messageError) reject(messageError);
+      else resolve(result);
+    });
+  });
+}
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'axiloom-workspaces-'));
 try {
@@ -52,6 +68,45 @@ try {
 
   assert.throws(() => workspaces.resolveFolder(root, '..\\outside'), /outside/);
   assert.equal(workspaces.describeRegistry(root, registry).length, 2);
+
+  assert.throws(() => workspaces.assertSingleLink({ nlink: 2 }, 'Workspace database'), /hard-linked/,
+    'workspace validation rejects a database inode reachable through another path');
+  const aliasPath = path.join(root, 'workspace-hardlink.sqlite');
+  try {
+    fs.linkSync(defaultWorkspace.databaseFile, aliasPath);
+    assert.throws(() => workspaces.validateWorkspacePaths(root, '.'), /hard-linked/,
+      'an active workspace database cannot also be reachable through an external hard link');
+    fs.unlinkSync(aliasPath);
+  } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+    console.warn(`Workspace hard-link integration test unavailable: ${error.code}`);
+  }
+
+  const outsidePath = path.join(root, 'outside');
+  const junctionPath = path.join(root, 'workspace-junction');
+  fs.mkdirSync(outsidePath);
+  let junctionCreated = false;
+  try { fs.symlinkSync(outsidePath, junctionPath, 'junction'); junctionCreated = true; }
+  catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+    console.warn(`Workspace junction test unavailable: ${error.code}`);
+  }
+  if (junctionCreated) assert.throws(() => workspaces.resolveFolder(root, 'workspace-junction'), /symbolic link or junction/,
+    'workspace paths cannot traverse a directory junction');
+
+  const restoreSource = path.join(root, 'restore-source.sqlite');
+  const restoreTarget = path.join(root, 'restore-snapshot.sqlite');
+  const restoreDb = database.openDatabase(restoreSource);
+  restoreDb.exec('PRAGMA journal_mode=WAL;');
+  restoreDb.prepare('INSERT INTO settings(key,value_json,updated_at) VALUES(?,?,?)').run('committed-before-snapshot', '{"value":"from-wal"}', new Date().toISOString());
+  await runWorkspaceWorker('restore-snapshot', { sourcePath: restoreSource, targetPath: restoreTarget });
+  await runWorkspaceWorker('validate', { dbPath: restoreTarget });
+  const restored = database.openDatabase(restoreTarget);
+  assert.equal(restored.prepare('SELECT value_json FROM settings WHERE key=?').get('committed-before-snapshot').value_json, '{"value":"from-wal"}',
+    'the restore snapshot includes committed data that is still in the source WAL');
+  restored.close();
+  restoreDb.close();
+
   console.log('Workspace isolation checks passed.');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

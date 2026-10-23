@@ -7,12 +7,17 @@ import configuration from '../electron/configuration.cjs';
 import database from '../electron/database.cjs';
 
 const { DEFAULT_CONFIG, normalizeConfig, validateConfig, configurationFingerprint, sourceIdentityKey } = configuration;
+const resourceLimits = (await import('../shared/resource-limits.json', { with: { type: 'json' } })).default.configuration;
 
 assert.deepEqual(DEFAULT_CONFIG.projects, []);
 assert.deepEqual(DEFAULT_CONFIG.teams, []);
 assert.deepEqual(DEFAULT_CONFIG.fieldMappings, []);
 assert.equal(DEFAULT_CONFIG.calendar.configured, false);
 assert.equal(DEFAULT_CONFIG.modules.businessSprint, false);
+assert.throws(() => validateConfig({ teams: Array.from({ length: resourceLimits.maxTeams + 1 }, (_, index) => ({ id: `team-${index}`, name: `Team ${index}` })) }), /exceeds its .* item limit/,
+  'configuration collections are bounded before normalization');
+assert.throws(() => validateConfig({ deeplyNested: Array.from({ length: resourceLimits.maxDepth + 2 }, () => ({})).reduceRight((value) => [value], null) }), /nesting safety limit/,
+  'arbitrary configuration nesting is bounded before recursive processing');
 assert.ok(DEFAULT_CONFIG.recordTemplates.some((template) => template.kind === 'product'));
 assert.throws(() => validateConfig({ schemaVersion: 5 }), /newer than the supported version 4/,
   'profiles from a newer schema must fail instead of being downgraded');

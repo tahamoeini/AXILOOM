@@ -1,7 +1,7 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const { DatabaseSync } = require('node:sqlite');
 const {
-  getIssueDetails, getIssueActivity, getSprintDetails, listIssues, listRecords,
+  getIssueDetails, getIssueActivity, getSprintDetails, listIssues, getEpicReport, listRecords,
   getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport, getBusinessBoardReport,
 } = require('./database.cjs');
 const { listBusinessSprints, getBusinessSprintReport } = require('./business-sprint.cjs');
@@ -12,6 +12,7 @@ const readers = {
   getIssueActivity,
   getSprintDetails,
   listIssues,
+  getEpicReport,
   listRecords,
   getRecordLinkSummaries: (database, ids) => {
     const recordIds = [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim()).filter(Boolean))].slice(0, 250);

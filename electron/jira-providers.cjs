@@ -1,6 +1,7 @@
 const dns = require('node:dns').promises;
 const https = require('node:https');
 const net = require('node:net');
+const RESOURCE_LIMITS = require('../shared/resource-limits.json');
 
 const PROVIDERS = Object.freeze({
   'offline-json': Object.freeze({
@@ -258,6 +259,17 @@ function createDataCenterAdapter(config, token, dependencies = {}) {
     }
     const method = String(options.method || 'GET').toUpperCase();
     const headers = { Accept: 'application/json', ...(options.headers || {}) };
+    const body = options.body;
+    let bodyBytes = 0;
+    if (body !== undefined && body !== null) {
+      if (typeof body === 'string') bodyBytes = Buffer.byteLength(body, 'utf8');
+      else if (Buffer.isBuffer(body) || body instanceof Uint8Array) bodyBytes = body.byteLength;
+      else throw new Error('Jira request body must be a bounded string or byte buffer.');
+      const maxBodyBytes = RESOURCE_LIMITS.attachments.maxTotalBytes
+        + RESOURCE_LIMITS.attachments.maxFiles * (RESOURCE_LIMITS.attachments.maxFileNameCharacters + 1024);
+      if (bodyBytes > maxBodyBytes) throw new Error(`Jira request body exceeds the ${Math.ceil(maxBodyBytes / 1024 / 1024)} MB safety limit.`);
+      headers['Content-Length'] = String(bodyBytes);
+    }
     if (token && !Object.keys(headers).some((name) => name.toLowerCase() === 'authorization')) headers.Authorization = `Bearer ${token}`;
     const secrets = [token, ...Object.entries(headers).filter(([name]) => name.toLowerCase() === 'authorization').map(([, value]) => value)];
     const signal = options.signal;
@@ -268,8 +280,9 @@ function createDataCenterAdapter(config, token, dependencies = {}) {
       const address = await resolveApprovedAddress(base, networkAccess, resolveHost);
       let response;
       try {
-        response = await sendRequest({ target, method, headers, body: options.body, address, signal, timeoutMs });
+        response = await sendRequest({ target, method, headers, body, address, signal, timeoutMs });
       } catch (error) {
+        console.error('DEBUG jira sendRequest error', error);
         if (signal?.aborted) throw abortError(signal);
         if (retryableMethod && attempt < 2 && isRetryableNetworkError(error)) {
           await delay(250 * (2 ** attempt), signal);
@@ -287,11 +300,11 @@ function createDataCenterAdapter(config, token, dependencies = {}) {
       if (response.status >= 300 && response.status < 400) {
         throw new Error('Jira returned a redirect. Check the configured base URL and reverse-proxy settings.');
       }
-      let body = null;
-      try { body = response.text ? JSON.parse(response.text) : null; }
-      catch { body = response.text; }
-      if (response.status >= 200 && response.status < 300) return body;
-      const error = apiError(response, body, secrets);
+      let responseBody = null;
+      try { responseBody = response.text ? JSON.parse(response.text) : null; }
+      catch { responseBody = response.text; }
+      if (response.status >= 200 && response.status < 300) return responseBody;
+      const error = apiError(response, responseBody, secrets);
       if (retryableMethod && attempt < 2 && isRetryableResponse(response)) {
         await delay(error.retryAfterMs ?? 250 * (2 ** attempt), signal);
         continue;

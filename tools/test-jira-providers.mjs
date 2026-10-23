@@ -6,6 +6,22 @@ const {
   createDataCenterAdapter, createOfflineAdapter, describeProvider,
   isApprovedPublicIpv4, isPrivateAddress, parseJiraBaseUrl, validateNetworkAccess,
 } = require('../electron/jira-providers.cjs');
+const { createPageBudget } = require('../electron/jira-page-budget.cjs');
+const { attachmentSize, multipartFiles } = require('../electron/jira-management.cjs');
+const resourceLimits = require('../shared/resource-limits.json');
+
+const pageBudget = createPageBudget('Fixture pages', { maxPages: 1, maxItems: 2, maxBytes: 100 });
+pageBudget.consume({ values: [1, 2] }, 2);
+assert.throws(() => pageBudget.consume({ values: [3] }, 1), /page safety limit/);
+assert.throws(() => createPageBudget('Fixture items', { maxPages: 2, maxItems: 1, maxBytes: 100 }).consume({ values: [1, 2] }, 2), /item safety limit/);
+assert.throws(() => createPageBudget('Fixture bytes', { maxPages: 2, maxItems: 2, maxBytes: 3 }).consume('too large', 1), /response safety limit/);
+
+assert.equal(attachmentSize([{ name: 'résumé.txt', bytes: new Uint8Array([1, 2]), type: 'text/plain' }]), 2);
+assert.throws(() => attachmentSize([]), /Select between/);
+assert.throws(() => attachmentSize([{ name: 'large.bin', bytes: new Array(resourceLimits.attachments.maxFileBytes + 1) }]), /Each attachment must be at most/);
+const multipart = multipartFiles([{ name: 'résumé.txt', bytes: new Uint8Array([1, 2]), type: 'text/plain' }]);
+assert.match(multipart.body.toString('utf8'), /filename\*=UTF-8''r%C3%A9sum%C3%A9.txt/);
+assert.ok(multipart.body.includes(Buffer.from([1, 2])), 'attachment bytes appear intact in the multipart body');
 
 assert.equal(describeProvider('jira-datacenter').capabilities.readOnlySync, true);
 assert.equal(describeProvider('offline-json').capabilities.fileImport, true);
@@ -48,6 +64,10 @@ assert.deepEqual(await privateAdapter.request('rest/api/2/myself'), { displayNam
 assert.equal(observed[0].address, '10.4.5.6', 'the request uses the address that passed policy validation');
 assert.equal(observed[0].target.href, 'https://jira.example.test/context/rest/api/2/myself');
 assert.equal(observed[0].headers.Authorization, 'Bearer secret-token');
+assert.equal(observed[0].body, undefined);
+assert.deepEqual(await privateAdapter.request('rest/api/2/issue', { method: 'POST', body: '{"summary":"safe"}' }), { displayName: 'Synthetic user' });
+assert.equal(observed.at(-1).headers['Content-Length'], String(Buffer.byteLength('{"summary":"safe"}')));
+await assert.rejects(privateAdapter.request('rest/api/2/issue', { method: 'POST', body: { unbounded: true } }), /bounded string or byte buffer/);
 await assert.rejects(privateAdapter.request('https://other.example.test/rest/api/2/myself'), /leave the configured endpoint/);
 await assert.rejects(privateAdapter.request('../outside'), /leave the configured endpoint/);
 

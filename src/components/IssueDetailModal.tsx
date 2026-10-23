@@ -70,17 +70,9 @@ export default function IssueDetailModal({ issueKey, jiraUrl, config, snapshot, 
     const value = await window.axiloom.getLiveIssue(issueKey, includeActivity);
     setDetails(value); setLive(true);
     if (includeActivity) {
-      const raw = value.raw || {};
-      const history = raw.changelog || {};
-      const comment = raw.fields?.comment || {};
-      const worklog = raw.fields?.worklog || {};
-      setActivityData({
-        hasMore: false,
-        history: { histories: history.histories || [], total: Number(history.total || 0), available: (history.histories || []).length, offset: 0, limit: (history.histories || []).length, hasMore: false, complete: Boolean(value.historyComplete) },
-        comments: { items: comment.comments || [], total: Number(comment.total || 0), available: (comment.comments || []).length, offset: 0, limit: (comment.comments || []).length, hasMore: false },
-        worklogs: { items: worklog.worklogs || [], total: Number(worklog.total || 0), available: (worklog.worklogs || []).length, offset: 0, limit: (worklog.worklogs || []).length, hasMore: false },
-      });
-      setActivityLoaded(true);
+      const localActivity = await window.axiloom.getIssueActivity(issueKey, 0, 50);
+      setActivityData(localActivity ? { ...localActivity, hasMore: Boolean(localActivity.history.hasMore || localActivity.comments.hasMore || localActivity.worklogs.hasMore) } : null);
+      setActivityLoaded(Boolean(localActivity));
     } else {
       const localActivity = await window.axiloom.getIssueActivity(issueKey, 0, 50);
       setActivityData(localActivity ? { ...localActivity, hasMore: Boolean(localActivity.history.hasMore || localActivity.comments.hasMore || localActivity.worklogs.hasMore) } : null);

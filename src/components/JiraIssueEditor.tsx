@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AppConfig, JiraFieldMeta } from '../types';
 import JiraFields, { describeJiraValue, validateJiraValues } from './JiraFields';
+import { serializeAttachmentSelection } from '../jira-attachments';
 
 export default function JiraIssueEditor({ issueKey, project: initialProject, current = {}, expectedUpdated = '', transition, config, close, saved }: {
   issueKey?: string; project?: string; current?: Record<string, any>; expectedUpdated?: string; transition?: any;
@@ -14,7 +15,7 @@ export default function JiraIssueEditor({ issueKey, project: initialProject, cur
   const [metadata, setMetadata] = useState<Record<string, JiraFieldMeta>>({});
   const [types, setTypes] = useState<any[]>([]); const [type, setType] = useState('');
   const [values, setValues] = useState<Record<string, any>>(current); const [changed, setChanged] = useState<Record<string, any>>({});
-  const [error, setError] = useState(''); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [review, setReview] = useState(false);
+  const [error, setError] = useState(''); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [review, setReview] = useState(false); const [uncertainCreate, setUncertainCreate] = useState(false);
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
@@ -77,22 +78,35 @@ export default function JiraIssueEditor({ issueKey, project: initialProject, cur
           catch (e) { warnings.push(`تسک ${key} ایجاد شد؛ ثبت کامنت کامل نشد: ${e instanceof Error ? e.message : ''}`); }
         }
         if (files.length) {
-          try { const response = await window.axiloom.uploadJiraAttachments({ key, files: await Promise.all(files.map(async (file) => ({ name: file.name, type: file.type, bytes: new Uint8Array(await file.arrayBuffer()) }))) }); if (response.warning) warnings.push(response.warning); }
+          try { const response = await window.axiloom.uploadJiraAttachments({ key, files: await serializeAttachmentSelection(files) }); if (response.warning) warnings.push(response.warning); }
           catch (e) { warnings.push(`تسک ${key} ایجاد شد؛ ارسال پیوست کامل نشد: ${e instanceof Error ? e.message : ''}`); }
         }
         warning = warnings.join('؛ ') || undefined;
       }
       // Mutation succeeded: close before refresh so a refresh error cannot cause resubmission.
       close(); await saved(key, warning);
-    } catch (e) { setError(e instanceof Error ? e.message : 'عملیات ذخیره نشد.'); setReview(false); }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'عملیات ذخیره نشد.';
+      setError(message);
+      if (!issueKey && !transition && /outcome is unknown|uncertain outcome/i.test(message)) setUncertainCreate(true);
+      else setReview(false);
+    }
     finally { setBusy(false); }
+  }
+  async function confirmCreateRetry() {
+    const confirmation = window.prompt('Check Jira for the new issue. Type the sentence below only if you confirmed that no issue was created.\n\nI checked Jira and no issue was created');
+    if (confirmation !== 'I checked Jira and no issue was created') return;
+    try {
+      await window.axiloom.confirmCreateJiraRetry(confirmation);
+      setUncertainCreate(false); setReview(false); setError('');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Retry confirmation failed.'); }
   }
   return <div className="modal-backdrop jira-editor-backdrop"><section className="record-modal" role="dialog" aria-modal="true" aria-label="فرم Jira"><div className="modal-heading"><h2>{transition ? `تغییر وضعیت به ${transition.to?.name || transition.name}` : issueKey ? `ویرایش ${issueKey}` : `ایجاد تسک در ${project}`}</h2><button className="button secondary" disabled={busy} onClick={cancel}>بستن</button></div>
     {!issueKey && !initialProject && <label className="form-field">پروژه<select value={project} disabled={busy || review} onChange={(e) => { if (!Object.keys(changed).length && !files.length && !comment || window.confirm('با تغییر پروژه، مقادیر فرم پاک می‌شوند. ادامه می‌دهید؟')) setProject(e.target.value); }}><option value="">انتخاب پروژهٔ قابل دسترس</option>{projects.map((item) => <option key={item.key} value={item.key}>{item.key} · {item.name}</option>)}</select></label>}
     {loading ? <p>دریافت فیلدها و دسترسی‌های واقعی Jira…</p> : <>
       {!issueKey && <label className="form-field">نوع تسک<select value={type} onChange={(e) => chooseType(e.target.value)}><option value="">انتخاب کنید</option>{types.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}
       {!review ? <><JiraFields metadata={metadata} values={values} issueKey={issueKey} project={project} issueType={type} config={config} onChange={(id, value) => { setValues((v) => ({ ...v, [id]: value })); setChanged((v) => ({ ...v, [id]: value })); }} />{!issueKey && type && <>{metadata.comment && <label className="form-field">کامنت اولیه<textarea value={comment} onChange={(e) => setComment(e.target.value)} /></label>}{metadata.attachment && <label className="form-field">پیوست‌های اولیه<input type="file" multiple onChange={(e) => setFiles(Array.from(e.target.files || []))} /></label>}</>}</> : <div className="change-review"><h3>مرور پیش از ارسال به Jira</h3>{!issueKey && <p>پروژه: {project} · نوع: {types.find((item) => item.id === type)?.name}</p>}{comment && <p>کامنت اولیه: {comment}</p>}{files.length > 0 && <p>پیوست‌ها: {files.map((file) => file.name).join('، ')}</p>}{Object.entries(changed).map(([id, value]) => <p key={id}><b>{metadata[id]?.name || id}</b>{issueKey && <del>{describeJiraValue(current[id])}</del>}<span>{describeJiraValue(Array.isArray(value) ? value.map((item) => metadata[id]?.allowedValues?.find((option) => option.id != null && String(option.id) === String(item?.id)) || item) : metadata[id]?.allowedValues?.find((option) => option.id != null && String(option.id) === String(value?.id)) || value)}</span></p>)}{transition && <p>وضعیت: {current.status?.name} ← {transition.to?.name || transition.name}</p>}<p>پس از تأیید، این تغییرات روی Jira اعمال می‌شوند.</p></div>}
-      {error && <p className="form-error">{error}</p>}<div className="modal-actions">{review && <button className="button secondary" disabled={busy} onClick={() => setReview(false)}>بازگشت به ویرایش</button>}<button className="button primary" disabled={busy || loading || !issueKey && !type} onClick={submit}>{busy ? 'در حال ارسال…' : review ? 'تأیید و ارسال به Jira' : 'مرور تغییرات'}</button></div>
+      {error && <p className="form-error">{error}</p>}{uncertainCreate && <div className="callout warning"><span>Jira may already have created this issue. Check Jira before enabling another create request.</span><button className="button secondary" disabled={busy} onClick={() => void confirmCreateRetry()}>I checked Jira; allow another attempt</button></div>}<div className="modal-actions">{review && <button className="button secondary" disabled={busy} onClick={() => setReview(false)}>بازگشت به ویرایش</button>}<button className="button primary" disabled={busy || loading || uncertainCreate || !issueKey && !type} onClick={submit}>{busy ? 'در حال ارسال…' : review ? 'تأیید و ارسال به Jira' : 'مرور تغییرات'}</button></div>
     </>}
   </section></div>;
 }

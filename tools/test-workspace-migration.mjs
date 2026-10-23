@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { migrateWorkspace } from './migrate-workspace.mjs';
+import { assertSingleLink, migrateWorkspace } from './migrate-workspace.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'axiloom-migration-'));
 const sourcePath = path.join(root, 'legacy.sqlite');
@@ -110,6 +110,27 @@ try {
   } finally { source.close(); }
 
   await assert.rejects(() => migrateWorkspace({ sourcePath, destinationPath }), /already exists/);
+  assert.throws(() => assertSingleLink({ nlink: 2 }), /hard-linked/,
+    'migration rejects a source alias that shares its inode with another path');
+  const hardlinkPath = path.join(root, 'legacy-hardlink.sqlite');
+  try {
+    fs.linkSync(sourcePath, hardlinkPath);
+    await assert.rejects(() => migrateWorkspace({ sourcePath: hardlinkPath, destinationPath: path.join(root, 'hardlink-destination.sqlite') }), /hard-linked/);
+    fs.unlinkSync(hardlinkPath);
+  } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+    console.warn(`Migration hard-link integration test unavailable: ${error.code}`);
+  }
+  const symlinkPath = path.join(root, 'legacy-symlink.sqlite');
+  try {
+    fs.symlinkSync(sourcePath, symlinkPath, 'file');
+    const symlinkDryRun = await migrateWorkspace({ sourcePath: symlinkPath, destinationPath: path.join(root, 'symlink-destination.sqlite'), dryRun: true });
+    assert.equal(symlinkDryRun.sourceModified, false, 'migration resolves a file symlink to the canonical database before checking sidecars');
+    fs.unlinkSync(symlinkPath);
+  } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+    console.warn(`Migration file-symlink test unavailable: ${error.code}`);
+  }
   const manifest = JSON.parse(fs.readFileSync(`${destinationPath}.migration.json`, 'utf8'));
   assert.equal(manifest.sourceModified, false);
   assert.equal(manifest.preservedEvidenceRowsVerified.product_records, 1);

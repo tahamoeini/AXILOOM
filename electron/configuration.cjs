@@ -2,6 +2,7 @@ const { createHash } = require('node:crypto');
 
 const { validateNetworkAccess } = require('./jira-providers.cjs');
 const DEFAULT_RECORD_TEMPLATES = require('../shared/record-templates.json');
+const RESOURCE_LIMITS = require('../shared/resource-limits.json').configuration;
 
 const CONFIG_SCHEMA_VERSION = 4;
 const SEMANTIC_KEYS = new Set([
@@ -9,6 +10,74 @@ const SEMANTIC_KEYS = new Set([
   'issueTags', 'requester', 'department', 'productOwner', 'loggedTime',
 ]);
 const TRANSFORMS = new Set(['identity', 'number', 'text', 'option-label', 'id-list', 'boolean']);
+
+function assertConfigResourceLimits(input) {
+  const stack = [{ value: input, path: '', depth: 0 }];
+  const visited = new Set();
+  let nodes = 0;
+  let estimatedBytes = 2;
+  const arrayLimit = (value, path) => {
+    const exact = {
+      projects: RESOURCE_LIMITS.maxProjects,
+      'projectRoles.productIntake': RESOURCE_LIMITS.maxProjects,
+      'projectRoles.technicalDelivery': RESOURCE_LIMITS.maxProjects,
+      'projectRoles.commitments': RESOURCE_LIMITS.maxProjects,
+      teams: RESOURCE_LIMITS.maxTeams,
+      boardRoutes: RESOURCE_LIMITS.maxBoardRoutes,
+      'teamAssignments.projects': RESOURCE_LIMITS.maxAssignments,
+      'teamAssignments.components': RESOURCE_LIMITS.maxAssignments,
+      'teamAssignments.issueOverrides': RESOURCE_LIMITS.maxAssignments,
+      fieldMappings: RESOURCE_LIMITS.maxFieldMappings,
+      workClassifications: RESOURCE_LIMITS.maxClassifications,
+      issueTypeClassifications: RESOURCE_LIMITS.maxClassifications,
+      capacityOverrides: RESOURCE_LIMITS.maxCapacityOverrides,
+      'calendar.workingDays': 7,
+      'calendar.holidays': RESOURCE_LIMITS.maxHolidays,
+      'calendar.workIntervals': RESOURCE_LIMITS.maxWorkIntervals,
+      migrationWarnings: RESOURCE_LIMITS.maxMigrationWarnings,
+      recordTemplates: 100,
+    }[path];
+    if (exact !== undefined) return exact;
+    if (/^teams\[\d+\]\.aliases$/.test(path)) return RESOURCE_LIMITS.maxTeamAliases;
+    if (/^workflows\.[^.]+\.milestones$/.test(path)) return RESOURCE_LIMITS.maxMilestonesPerScope;
+    if (/^workflows\.[^.]+\.(backlogStatuses|readyStatuses|startedStatuses|blockedStatuses|reviewStatuses|entryStatuses|completedStatuses|cancelledStatuses|completionStatusCategories)$/.test(path)) return RESOURCE_LIMITS.maxStatusesPerScope;
+    if (/^recordTemplates\[\d+\]\.fields$/.test(path)) return 200;
+    if (/^recordTemplates\[\d+\]\.fields\[\d+\]\.options$/.test(path)) return 100;
+    if (/^recordTemplates\[\d+\]\.fields\[\d+\]\.referenceKinds$/.test(path)) return 100;
+    return RESOURCE_LIMITS.maxArrayItems;
+  };
+
+  while (stack.length) {
+    const current = stack.pop();
+    const value = current.value;
+    if (value === null || typeof value !== 'object') {
+      const size = typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : String(value).length;
+      estimatedBytes += size + 1;
+      if (estimatedBytes > RESOURCE_LIMITS.maxSerializedBytes) throw new Error('Configuration exceeds the 2 MB serialized safety limit.');
+      continue;
+    }
+    if (visited.has(value)) continue;
+    visited.add(value);
+    nodes += 1;
+    if (nodes > RESOURCE_LIMITS.maxNodes) throw new Error(`Configuration exceeds the ${RESOURCE_LIMITS.maxNodes.toLocaleString()} node safety limit.`);
+    if (current.depth > RESOURCE_LIMITS.maxDepth) throw new Error(`Configuration exceeds the ${RESOURCE_LIMITS.maxDepth}-level nesting safety limit.`);
+    const entries = Array.isArray(value) ? value : Object.entries(value);
+    if (Array.isArray(value)) {
+      const limit = arrayLimit(value, current.path);
+      if (value.length > limit) throw new Error(`Configuration collection ${current.path || '(root)'} exceeds its ${limit.toLocaleString()} item limit.`);
+      estimatedBytes += 2 + value.length;
+      value.forEach((item, index) => stack.push({ value: item, path: current.path ? `${current.path}[${index}]` : `[${index}]`, depth: current.depth + 1 }));
+    } else {
+      if (entries.length > RESOURCE_LIMITS.maxArrayItems) throw new Error(`Configuration object ${current.path || '(root)'} has too many properties.`);
+      estimatedBytes += 2 + entries.length;
+      for (const [key, item] of entries) {
+        estimatedBytes += Buffer.byteLength(key, 'utf8') + 1;
+        stack.push({ value: item, path: current.path ? `${current.path}.${key}` : key, depth: current.depth + 1 });
+      }
+    }
+    if (estimatedBytes > RESOURCE_LIMITS.maxSerializedBytes) throw new Error('Configuration exceeds the 2 MB serialized safety limit.');
+  }
+}
 
 const DEFAULT_CONFIG = Object.freeze({
   schemaVersion: CONFIG_SCHEMA_VERSION,
@@ -153,6 +222,7 @@ function stableLegacySourceId(endpoint) {
 
 function normalizeConfig(input = {}) {
   if (!isRecord(input)) throw new Error('Configuration must be an object.');
+  assertConfigResourceLimits(input);
   const hasSchemaVersion = Object.hasOwn(input, 'schemaVersion');
   const inputSchemaVersion = hasSchemaVersion ? input.schemaVersion : 0;
   if (hasSchemaVersion && (typeof inputSchemaVersion !== 'number' || !Number.isSafeInteger(inputSchemaVersion) || inputSchemaVersion < 0)) {
@@ -366,14 +436,23 @@ function rangesOverlap(left, right) {
 }
 
 function validateAssignmentSet(items, scopeKey, label) {
-  items.forEach((item, index) => {
+  const groups = new Map();
+  items.forEach((item) => {
     assertActiveDates(item, label);
-    for (let otherIndex = 0; otherIndex < index; otherIndex += 1) {
-      const other = items[otherIndex];
-      assert(scopeKey(item) !== scopeKey(other) || !rangesOverlap(item, other),
-        `${label} has overlapping effective dates for ${scopeKey(item)}.`);
-    }
+    const key = scopeKey(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
   });
+  for (const [key, group] of groups) {
+    group.sort((left, right) => (left.activeFrom || '0000-01-01').localeCompare(right.activeFrom || '0000-01-01'));
+    let latestEnd = '';
+    for (const item of group) {
+      const start = item.activeFrom || '0000-01-01';
+      const end = item.activeTo || '9999-12-31';
+      assert(!latestEnd || start > latestEnd, `${label} has overlapping effective dates for ${key}.`);
+      if (!latestEnd || end > latestEnd) latestEnd = end;
+    }
+  }
 }
 
 function validateTeamAssignments(config) {
@@ -465,15 +544,20 @@ function validateConfig(input) {
     assertActiveDates(team, `Team ${team.id}`);
     teamIds.add(team.id);
   });
-  config.teams.forEach((team) => {
-    const visited = new Set([team.id]);
-    let parent = team.parentTeamId;
-    while (parent) {
-      assert(!visited.has(parent), `Team hierarchy contains a cycle at ${parent}.`);
-      visited.add(parent);
-      parent = config.teams.find((candidate) => candidate.id === parent)?.parentTeamId || '';
+  const parentById = new Map(config.teams.map((team) => [team.id, team.parentTeamId]));
+  const hierarchyState = new Map();
+  for (const team of config.teams) {
+    if (hierarchyState.get(team.id) === 2) continue;
+    const path = [];
+    let current = team.id;
+    while (current && !hierarchyState.has(current)) {
+      hierarchyState.set(current, 1);
+      path.push(current);
+      current = parentById.get(current) || '';
     }
-  });
+    assert(!current || hierarchyState.get(current) !== 1, `Team hierarchy contains a cycle at ${current}.`);
+    for (const id of path) hierarchyState.set(id, 2);
+  }
   const teamLabels = new Map();
   config.teams.forEach((team) => {
     for (const label of [team.name, ...team.aliases]) {
@@ -484,20 +568,35 @@ function validateConfig(input) {
       teamLabels.set(normalized, team.id);
     }
   });
-  const capacityOverrideKeys = [];
+  const capacityOverrideGroups = new Map();
   config.capacityOverrides.forEach((item) => {
     assert(item.teamId && item.assigneeKey, 'Capacity overrides need a stable team ID and assignee key.');
-    assert(config.teams.some((team) => team.id === item.teamId), `Capacity override references an unknown team ID: ${item.teamId}`);
+    assert(teamIds.has(item.teamId), `Capacity override references an unknown team ID: ${item.teamId}`);
     assert(item.sprintId || item.activeFrom || item.activeTo, 'Capacity overrides need a sprint ID or an effective date range.');
     assertActiveDates(item, `Capacity override for ${item.teamId}`);
-    const duplicate = capacityOverrideKeys.find((existing) => existing.teamId === item.teamId
-      && existing.assigneeKey === item.assigneeKey && (!existing.sprintId || !item.sprintId || existing.sprintId === item.sprintId)
-      && rangesOverlap(existing, item));
-    assert(!duplicate, `Overlapping capacity overrides for ${item.teamId} and ${item.assigneeKey}.`);
-    capacityOverrideKeys.push(item);
+    const key = `${item.teamId}\u0000${item.assigneeKey}`;
+    if (!capacityOverrideGroups.has(key)) capacityOverrideGroups.set(key, []);
+    capacityOverrideGroups.get(key).push(item);
     assert(item.overrideWorkingDays === null || Number.isFinite(item.overrideWorkingDays) && item.overrideWorkingDays >= 0 && item.overrideWorkingDays <= 366, 'Override working days must be between 0 and 366.');
     assert(Number.isFinite(item.allocation) && item.allocation >= 0 && item.allocation <= 1, 'Capacity allocation must be between 0 and 1.');
   });
+  for (const group of capacityOverrideGroups.values()) {
+    group.sort((left, right) => (left.activeFrom || '0000-01-01').localeCompare(right.activeFrom || '0000-01-01'));
+    let wildcardEnd = '';
+    let anySprintEnd = '';
+    const sprintEnds = new Map();
+    for (const item of group) {
+      const start = item.activeFrom || '0000-01-01';
+      const end = item.activeTo || '9999-12-31';
+      const sprint = item.sprintId || '';
+      assert(!(wildcardEnd && start <= wildcardEnd) && !(sprint ? (sprintEnds.get(sprint) || '') >= start : anySprintEnd >= start),
+        `Overlapping capacity overrides for ${item.teamId} and ${item.assigneeKey}.`);
+      if (sprint) {
+        if (end > (sprintEnds.get(sprint) || '')) sprintEnds.set(sprint, end);
+        if (end > anySprintEnd) anySprintEnd = end;
+      } else if (end > wildcardEnd) wildcardEnd = end;
+    }
+  }
   config.boardRoutes.forEach((route) => {
     assert(/^\d+$/.test(route.boardId), `Invalid board ID: ${route.boardId}`);
     assert(teamIds.has(route.teamId), `Board ${route.boardId} references an unknown team.`);
@@ -572,16 +671,16 @@ function validateConfig(input) {
       assert(new Set(interval.weekdays).size === interval.weekdays.length, 'Calendar work interval weekdays must be unique.');
     }
   });
-  for (let leftIndex = 0; leftIndex < config.calendar.workIntervals.length; leftIndex += 1) {
-    const left = config.calendar.workIntervals[leftIndex];
-    const leftStart = Number(left.start.slice(0, 2)) * 60 + Number(left.start.slice(3));
-    const leftEnd = Number(left.end.slice(0, 2)) * 60 + Number(left.end.slice(3));
-    for (const right of config.calendar.workIntervals.slice(leftIndex + 1)) {
-      const rightStart = Number(right.start.slice(0, 2)) * 60 + Number(right.start.slice(3));
-      const rightEnd = Number(right.end.slice(0, 2)) * 60 + Number(right.end.slice(3));
-      const weekdays = (interval) => interval.weekdays || config.calendar.workingDays;
-      const overlapsOnDay = weekdays(left).some((day) => weekdays(right).includes(day));
-      assert(!overlapsOnDay || leftEnd <= rightStart || rightEnd <= leftStart, 'Calendar work intervals must not overlap on the same weekday.');
+  const intervalsByWeekday = new Map(config.calendar.workingDays.map((day) => [day, []]));
+  for (const interval of config.calendar.workIntervals) {
+    const start = Number(interval.start.slice(0, 2)) * 60 + Number(interval.start.slice(3));
+    const end = Number(interval.end.slice(0, 2)) * 60 + Number(interval.end.slice(3));
+    for (const day of interval.weekdays || config.calendar.workingDays) intervalsByWeekday.get(day).push({ start, end });
+  }
+  for (const intervals of intervalsByWeekday.values()) {
+    intervals.sort((left, right) => left.start - right.start);
+    for (let index = 1; index < intervals.length; index += 1) {
+      assert(intervals[index - 1].end <= intervals[index].start, 'Calendar work intervals must not overlap on the same weekday.');
     }
   }
   for (const [scope, workflow] of Object.entries(config.workflows)) {

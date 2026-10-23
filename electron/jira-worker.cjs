@@ -1,6 +1,7 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const { openDatabase, saveIssue, saveSprint, mergeIssueHistoryPage } = require('./database.cjs');
 const { createProviderAdapter } = require('./jira-providers.cjs');
+const { createPageBudget } = require('./jira-page-budget.cjs');
 
 const { discoverMetadata } = require('./jira-metadata.cjs');
 
@@ -8,6 +9,7 @@ const { dbPath, config, token, resume } = workerData;
 const db = openDatabase(dbPath);
 const provider = createProviderAdapter(config, token);
 const abortController = new AbortController();
+const syncBudget = createPageBudget('Jira synchronization');
 parentPort.on('message', (message) => {
   if (message?.type === 'cancel') abortController.abort();
 });
@@ -36,9 +38,12 @@ function writeSyncState(key, value) {
 
 function clearSyncState(key) { db.prepare('DELETE FROM sync_state WHERE key=?').run(key); }
 
-function getJira(resource, options = {}) {
+async function getJira(resource, options = {}) {
   throwIfCancelled();
-  return provider.request(resource, { ...options, signal: abortController.signal });
+  const value = await provider.request(resource, { ...options, signal: abortController.signal });
+  throwIfCancelled();
+  syncBudget.consume(value);
+  return value;
 }
 
 function beginRun() {
@@ -49,6 +54,7 @@ function beginRun() {
 }
 
 function upsertIssuePage(issues, checkpointKey, checkpointState) {
+  throwIfCancelled();
   let added = 0; let updated = 0; let duplicate = 0; let conflict = 0; let skipped = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -67,6 +73,7 @@ function upsertIssuePage(issues, checkpointKey, checkpointState) {
     // cursor before the page data is durable.
     if (checkpointState) writeSyncState(checkpointKey, checkpointState);
     else clearSyncState(checkpointKey);
+    throwIfCancelled();
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   return { added, updated, duplicate, conflict, skipped };
@@ -180,6 +187,7 @@ async function syncIssueHistory() {
         for (;;) {
           const params = new URLSearchParams({ startAt: String(startAt), maxResults: '100' });
           const page = await getJira(`rest/api/2/issue/${encodeURIComponent(issue.key)}/changelog?${params.toString()}`);
+          throwIfCancelled();
           const values = page.histories || page.values || [];
           const merged = mergeIssueHistoryPage(db, issue.id, { ...page, startAt, histories: values }, 'jira-sync-history');
           if (merged.complete) { clearSyncState(key); break; }
@@ -222,6 +230,7 @@ async function syncCollections() {
         const items = []; let startAt = 0;
         for (;;) {
           const page = await getJira(`rest/api/2/issue/${issue.key}/${field}?startAt=${startAt}&maxResults=100`);
+          throwIfCancelled();
           const values = page[property] || [];
           items.push(...values); startAt += values.length;
           if (startAt >= Number(page.total || 0)) break;

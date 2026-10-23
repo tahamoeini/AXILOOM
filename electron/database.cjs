@@ -5,6 +5,7 @@ const { gzipSync, gunzipSync } = require('node:zlib');
 const { DatabaseSync } = require('node:sqlite');
 const { DEFAULT_CONFIG, normalizeConfig, validateConfig, configurationFingerprint, sourceIdentityKey } = require('./configuration.cjs');
 const { resolveSemanticFields, isIssueDone, completionPolicyForProject, lifecycleRolesForStatus } = require('./semantic-mapping.cjs');
+const RESOURCE_LIMITS = require('../shared/resource-limits.json');
 
 function openDatabase(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -876,7 +877,7 @@ function routeForBoard(db, boardId, timestamp = Date.now()) {
   return team.name;
 }
 
-function saveIssue(db, issue, sourceFile, runId, options = {}) {
+function saveIssueCore(db, issue, sourceFile, runId, options = {}) {
   const jiraId = String(issue?.id ?? '').trim();
   const issueKey = String(issue?.key ?? '').trim().toUpperCase();
   if (!jiraId || !issueKey || !issue?.fields || typeof issue.fields !== 'object') {
@@ -886,6 +887,7 @@ function saveIssue(db, issue, sourceFile, runId, options = {}) {
   const existing = db.prepare('SELECT jira_id,issue_key,updated_at,raw_json,source_file,imported_at,history_complete FROM jira_issues WHERE jira_id=? OR issue_key=?').get(jiraId, issueKey);
   const incomingUpdated = issue.fields.updated || null;
   const rawJson = JSON.stringify(issue);
+  if (Buffer.byteLength(rawJson, 'utf8') > RESOURCE_LIMITS.imports.maxRecordBytes) throw new Error(`Issue ${issueKey} exceeds the ${RESOURCE_LIMITS.imports.maxRecordBytes / 1024 / 1024} MB source-record limit.`);
   if (existing && (existing.jira_id !== jiraId || existing.issue_key !== issueKey)) {
     db.prepare('INSERT INTO import_conflicts(run_id,identity,source_file,reason,current_json,incoming_json,created_at) VALUES(?,?,?,?,?,?,?)')
       .run(runId || null, `${jiraId}/${issueKey}`, sourceFile || null, 'IDENTITY_COLLISION', existing.raw_json, rawJson, new Date().toISOString());
@@ -911,6 +913,7 @@ function saveIssue(db, issue, sourceFile, runId, options = {}) {
     }
     const merged = buildMergedIssue(currentIssue, issue, incomingWins || (sameTimestamp && (liveSource || Object.keys(issue.fields || {}).length > Object.keys(currentIssue.fields || {}).length)), coverage.rows, coverage.total, coverage.complete);
     const mergedJson = JSON.stringify(merged);
+    if (Buffer.byteLength(mergedJson, 'utf8') > RESOURCE_LIMITS.imports.maxRecordBytes) throw new Error(`Merged issue ${issueKey} exceeds the ${RESOURCE_LIMITS.imports.maxRecordBytes / 1024 / 1024} MB source-record limit; its existing evidence remains unchanged.`);
     const currentLatest = incomingWins ? incomingUpdated : existing.updated_at;
     const project = merged.fields.project?.key || issueKey.split('-')[0];
     if (mergedJson !== existing.raw_json || coverage.complete !== Boolean(existing.history_complete)) {
@@ -928,14 +931,29 @@ function saveIssue(db, issue, sourceFile, runId, options = {}) {
   storeIssueEvidence(db, issue, jiraId, issueKey, sourceFile, importedAt);
   const coverage = historyCoverage(db, jiraId, issue?.changelog?.total, Boolean(issue?.changelog));
   const merged = buildMergedIssue(issue, issue, true, coverage.rows, coverage.total, coverage.complete);
+  const mergedJson = JSON.stringify(merged);
+  if (Buffer.byteLength(mergedJson, 'utf8') > RESOURCE_LIMITS.imports.maxRecordBytes) throw new Error(`Merged issue ${issueKey} exceeds the ${RESOURCE_LIMITS.imports.maxRecordBytes / 1024 / 1024} MB source-record limit.`);
   db.prepare('INSERT INTO jira_issues(jira_id,issue_key,project_key,updated_at,raw_json,source_file,imported_at,history_complete) VALUES(?,?,?,?,?,?,?,?)')
-    .run(jiraId, issueKey, issue.fields.project?.key || issueKey.split('-')[0], incomingUpdated, JSON.stringify(merged), sourceFile || null, importedAt, coverage.complete ? 1 : 0);
+    .run(jiraId, issueKey, issue.fields.project?.key || issueKey.split('-')[0], incomingUpdated, mergedJson, sourceFile || null, importedAt, coverage.complete ? 1 : 0);
   db.prepare('UPDATE jira_issues SET history_total=? WHERE jira_id=?').run(coverage.total, jiraId);
   saveSemanticProjection(db, merged, getConfig(db));
   return { status: 'added' };
 }
 
-function saveSprint(db, sprint, sourceFile, runId) {
+function saveIssue(db, issue, sourceFile, runId, options = {}) {
+  db.exec('SAVEPOINT axiloom_save_issue');
+  try {
+    const result = saveIssueCore(db, issue, sourceFile, runId, options);
+    db.exec('RELEASE axiloom_save_issue');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK TO axiloom_save_issue');
+    db.exec('RELEASE axiloom_save_issue');
+    throw error;
+  }
+}
+
+function saveSprintCore(db, sprint, sourceFile, runId) {
   const id = sprint?.id === undefined ? '' : String(sprint.id);
   if (!id) return { status: 'skipped', reason: 'SPRINT_ID_MISSING' };
   const boardId = sprint.originBoardId === undefined ? null : String(sprint.originBoardId);
@@ -943,6 +961,7 @@ function saveSprint(db, sprint, sourceFile, runId) {
   const teamRoute = routeForBoard(db, boardId, routeDate);
   const existing = db.prepare('SELECT raw_json,source_file,imported_at,state FROM jira_sprints WHERE sprint_id=?').get(id);
   const rawJson = JSON.stringify(sprint);
+  if (Buffer.byteLength(rawJson, 'utf8') > RESOURCE_LIMITS.imports.maxRecordBytes) throw new Error(`Sprint ${id} exceeds the ${RESOURCE_LIMITS.imports.maxRecordBytes / 1024 / 1024} MB source-record limit.`);
   if (existing?.raw_json === rawJson) return { status: 'duplicate' };
   const importedAt = new Date().toISOString();
   storeSprintRevision(db, id, rawJson, sourceFile, importedAt);
@@ -959,6 +978,7 @@ function saveSprint(db, sprint, sourceFile, runId) {
     }
     const mergedSprint = { ...previous, ...sprint };
     const mergedJson = JSON.stringify(mergedSprint);
+    if (Buffer.byteLength(mergedJson, 'utf8') > RESOURCE_LIMITS.imports.maxRecordBytes) throw new Error(`Merged Sprint ${id} exceeds the source-record size limit.`);
     db.prepare('UPDATE jira_sprints SET board_id=?,team_route=?,state=?,start_date=?,end_date=?,activated_date=?,complete_date=?,raw_json=?,source_file=?,imported_at=? WHERE sprint_id=?')
       .run(boardId, teamRoute, mergedSprint.state || null, mergedSprint.startDate || null, mergedSprint.endDate || null, mergedSprint.activatedDate || null, mergedSprint.completeDate || null, mergedJson, sourceFile || null, importedAt, id);
     return { status: 'updated' };
@@ -966,6 +986,19 @@ function saveSprint(db, sprint, sourceFile, runId) {
   db.prepare('INSERT INTO jira_sprints(sprint_id,board_id,team_route,state,start_date,end_date,activated_date,complete_date,raw_json,source_file,imported_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
     .run(id, boardId, teamRoute, sprint.state || null, sprint.startDate || null, sprint.endDate || null, sprint.activatedDate || null, sprint.completeDate || null, rawJson, sourceFile || null, importedAt);
   return { status: 'added' };
+}
+
+function saveSprint(db, sprint, sourceFile, runId) {
+  db.exec('SAVEPOINT axiloom_save_sprint');
+  try {
+    const result = saveSprintCore(db, sprint, sourceFile, runId);
+    db.exec('RELEASE axiloom_save_sprint');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK TO axiloom_save_sprint');
+    db.exec('RELEASE axiloom_save_sprint');
+    throw error;
+  }
 }
 
 function saveLocalIssueLink(db, input) {
@@ -1338,6 +1371,72 @@ function listIssues(db, filters = {}) {
   };
 }
 
+function getEpicReport(db, input = {}) {
+  const epic = String(input.epic || '').trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9_]*-\d+$/.test(epic)) throw new Error('Epic key is invalid.');
+  const limits = RESOURCE_LIMITS.epicReport;
+  const pageSize = Math.max(1, Math.min(250, Math.trunc(Number(input.limit) || limits.pageSize)));
+  const offset = Math.max(0, Math.min(2147483647, Math.trunc(Number(input.offset) || 0)));
+  const tag = String(input.adhocTag || 'Ad hoc').trim().toLocaleLowerCase();
+  const filters = { epic, workflowScope: 'delivery', sortBy: 'key' };
+  const first = listIssues(db, { ...filters, offset: 0, limit: 250 });
+  if (first.total > RESOURCE_LIMITS.jira.maxItemsPerSync) throw new Error(`Epic report exceeds the ${RESOURCE_LIMITS.jira.maxItemsPerSync.toLocaleString()} issue calculation limit; narrow the report scope before opening it.`);
+  const summary = { total: 0, done: 0, totalSP: 0, doneSP: 0, adhocCount: 0, adhocDoneCount: 0, adhocSP: 0, adhocDoneSP: 0, withoutSP: 0 };
+  const projectGroups = new Map();
+  const teamGroups = new Map();
+  const addGroup = (groups, key, factory) => {
+    if (!groups.has(key)) {
+      if (groups.size >= limits.maxGroups) throw new Error(`Epic report has more than ${limits.maxGroups.toLocaleString()} project or component groups.`);
+      groups.set(key, factory());
+    }
+    return groups.get(key);
+  };
+  for (let currentOffset = 0; currentOffset < first.total; currentOffset += 250) {
+    const page = currentOffset === 0 ? first : listIssues(db, { ...filters, offset: currentOffset, limit: 250 });
+    if (!page.items.length && currentOffset < first.total) throw new Error('Epic report pagination stopped before all issues were processed.');
+    for (const issue of page.items) {
+      const points = typeof issue.points === 'number' && Number.isFinite(issue.points) ? issue.points : 0;
+      const done = Boolean(issue.isDone);
+      const adhoc = (issue.tags || []).some((value) => String(value).trim().toLocaleLowerCase() === tag);
+      summary.total += 1;
+      if (done) summary.done += 1;
+      summary.totalSP += points;
+      if (done) summary.doneSP += points;
+      if (issue.points == null) summary.withoutSP += 1;
+      if (adhoc) {
+        summary.adhocCount += 1;
+        summary.adhocSP += points;
+        if (done) { summary.adhocDoneCount += 1; summary.adhocDoneSP += points; }
+      }
+      const project = String(issue.project || 'نامشخص');
+      const projectGroup = addGroup(projectGroups, project, () => ({ project, count: 0, done: 0, points: 0, donePoints: 0, adhocCount: 0, adhocPoints: 0 }));
+      projectGroup.count += 1;
+      if (done) projectGroup.done += 1;
+      projectGroup.points += points;
+      if (done) projectGroup.donePoints += points;
+      if (adhoc) { projectGroup.adhocCount += 1; projectGroup.adhocPoints += points; }
+      for (const team of new Set(issue.components?.length ? issue.components : [project])) {
+        const teamGroup = addGroup(teamGroups, String(team), () => ({ team: String(team), count: 0, done: 0, points: 0, donePoints: 0 }));
+        teamGroup.count += 1;
+        if (done) teamGroup.done += 1;
+        teamGroup.points += points;
+        if (done) teamGroup.donePoints += points;
+      }
+    }
+  }
+  const issuePage = listIssues(db, { ...filters, offset, limit: pageSize });
+  return {
+    items: issuePage.items,
+    total: first.total,
+    offset: issuePage.offset,
+    limit: issuePage.limit,
+    hasMore: issuePage.hasMore,
+    summary,
+    projects: Array.from(projectGroups.values()).sort((a, b) => a.project.localeCompare(b.project)),
+    teams: Array.from(teamGroups.values()).sort((a, b) => a.team.localeCompare(b.team)),
+  };
+}
+
 function getIssueFilterOptions(db, project = '') {
   const where = ["issue_key NOT IN (SELECT issue_key FROM jira_issue_tombstones)"];
   const params = [];
@@ -1427,8 +1526,14 @@ function getIssueDetails(db, key, includeActivity = true) {
   if (!includeActivity) {
     const historyTotal = Number(issue.changelog?.total ?? row.history_total ?? 0);
     issue.changelog = { startAt: 0, total: historyTotal, histories: [] };
-    if (issue.fields.comment) issue.fields.comment = { total: Number(issue.fields.comment.total || issue.fields.comment.comments?.length || 0), comments: [] };
-    if (issue.fields.worklog) issue.fields.worklog = { ...issue.fields.worklog, worklogs: [] };
+    if (issue.fields.comment) {
+      const comments = Array.isArray(issue.fields.comment.comments) ? issue.fields.comment.comments : [];
+      issue.fields.comment = { total: Number(issue.fields.comment.total || comments.length), comments: [...comments].sort((a, b) => String(b.created || '').localeCompare(String(a.created || ''))).slice(0, 50) };
+    }
+    if (issue.fields.worklog) {
+      const worklogs = Array.isArray(issue.fields.worklog.worklogs) ? issue.fields.worklog.worklogs : [];
+      issue.fields.worklog = { ...issue.fields.worklog, worklogs: [...worklogs].sort((a, b) => String(b.started || '').localeCompare(String(a.started || ''))).slice(0, 50) };
+    }
   }
   const revisions = db.prepare(`SELECT updated_at AS updatedAt,imported_at AS importedAt,source_file AS sourceFile,
     history_count AS historyCount,history_total AS historyTotal,history_complete AS historyComplete
@@ -1542,6 +1647,7 @@ function mergeIssueHistoryPage(db, jiraId, page, sourceFile = 'jira-sync-history
     issue.changelog.maxResults = coverage.rows.length;
     const importedAt = new Date().toISOString();
     const mergedJson = JSON.stringify(issue);
+    if (Buffer.byteLength(mergedJson, 'utf8') > RESOURCE_LIMITS.imports.maxRecordBytes) throw new Error(`Jira history for ${row.issue_key} exceeds the ${RESOURCE_LIMITS.imports.maxRecordBytes / 1024 / 1024} MB source-record limit; the previous complete page remains intact.`);
     storeIssueEvidence(db, issue, String(jiraId), row.issue_key, sourceFile, importedAt);
     db.prepare('UPDATE jira_issues SET raw_json=?,history_complete=?,history_total=?,imported_at=?,source_file=? WHERE jira_id=?')
       .run(mergedJson, coverage.complete ? 1 : 0, coverage.total, importedAt, sourceFile, String(jiraId));
@@ -1647,5 +1753,5 @@ module.exports = {
   listLocalIssueLinks, mergeIssueHistoryPage, getIssueActivity, getDataGeneration, getMetricsGeneration, getCachedReport, saveCachedReport,
   getCachedMetrics, saveCachedMetrics,
   saveBusinessIssueCache, getBusinessBoardReport,
-  listIssues, listRecords, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport,
+  listIssues, getEpicReport, listRecords, getIssueFilterOptions, getIssueOverviewStats, getCalendarPeriodReport,
 };

@@ -16,6 +16,7 @@ import IssueDetailModal from './components/IssueDetailModal';
 import SprintDetailModal from './components/SprintDetailModal';
 import { formatNumber, setDisplayPreferences } from './components/Primitives';
 import { PageId, RecordKind, Snapshot, AppConfig, ProductRecord } from './types';
+import resourceLimits from '../shared/resource-limits.json';
 
 const navigation: Array<{ id: PageId; label: string; group: string; icon: typeof Gauge }> = [
   { id: 'overview', label: 'نمای کلی', group: 'گزارش‌ها', icon: Gauge },
@@ -89,6 +90,13 @@ export default function App() {
 
   async function startJsonImport(files: FileList | null) {
     if (!files?.length) return;
+    const limits = resourceLimits.imports;
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length > limits.maxFiles || selectedFiles.some((file) => file.size > limits.maxFileBytes)
+      || selectedFiles.reduce((total, file) => total + file.size, 0) > limits.maxTotalBytes) {
+      setNotice({ tone: 'error', text: `Select at most ${limits.maxFiles} JSON files; each may be up to ${limits.maxFileBytes / 1024 / 1024} MB and the total up to ${limits.maxTotalBytes / 1024 / 1024} MB.` });
+      return;
+    }
     if (!config) { setNotice({ tone: 'error', text: 'Load a workspace configuration before importing Jira files.' }); return; }
     const configuredSourceName = config.sourceInstance.displayName.trim()
       || (config.jiraUrl ? new URL(config.jiraUrl).hostname : '');
@@ -97,7 +105,6 @@ export default function App() {
       : '');
     if (!sourceName) { setNotice({ tone: 'error', text: 'Set a source name in Settings before importing Jira files.' }); setPage('settings'); return; }
     if (!window.confirm(`Import these files into source "${sourceName}" in this workspace? Import only files from this Jira instance; use a separate workspace for another source.`)) return;
-    const selectedFiles = Array.from(files);
     let workerRef: Worker | null = null;
     setImportProgress({ phase: 'starting', fileName: '', completed: 0, total: selectedFiles.length });
     try {

@@ -250,7 +250,7 @@ export default function Settings({ config, setConfig, snapshot, refresh, notify,
     if (!window.confirm(`Revoke “${pat.name || pat.id}” in Jira? This also removes the local credential used by Axiloom.`)) return;
     setWorking('pat-revoke');
     try {
-      await window.axiloom.revokePat(pat.id);
+      await window.axiloom.revokePat({ tokenId: pat.id, confirmation: pat.id });
       setPatRecords((current) => current?.filter((item) => item.id !== pat.id) || []);
       setConnection(null);
       setDraft((current) => current ? { ...current, hasSavedPat: false } : current);

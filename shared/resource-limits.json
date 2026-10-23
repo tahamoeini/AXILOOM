@@ -1,0 +1,60 @@
+{
+  "configuration": {
+    "maxSerializedBytes": 2097152,
+    "maxDepth": 32,
+    "maxNodes": 50000,
+    "maxArrayItems": 10000,
+    "maxTeams": 500,
+    "maxTeamAliases": 100,
+    "maxProjects": 500,
+    "maxBoardRoutes": 2000,
+    "maxAssignments": 5000,
+    "maxFieldMappings": 2000,
+    "maxClassifications": 1000,
+    "maxCapacityOverrides": 5000,
+    "maxHolidays": 5000,
+    "maxWorkIntervals": 2000,
+    "maxStatusesPerScope": 200,
+    "maxMilestonesPerScope": 100,
+    "maxMigrationWarnings": 100
+  },
+  "imports": {
+    "maxFiles": 100,
+    "maxFileBytes": 67108864,
+    "maxTotalBytes": 536870912,
+    "maxRecordsPerRun": 500000,
+    "maxBatchRecords": 100,
+    "maxBatchBytes": 16777216,
+    "maxRecordBytes": 8388608,
+    "maxMetadataBytes": 8388608,
+    "maxIcsBytes": 16777216,
+    "maxIcsEvents": 10000,
+    "maxIcsLineCharacters": 65536
+  },
+  "attachments": {
+    "maxFiles": 20,
+    "maxFileBytes": 20971520,
+    "maxTotalBytes": 67108864,
+    "maxFileNameCharacters": 255
+  },
+  "workspace": {
+    "maxRestoreBytes": 2147483648,
+    "maxUserVersion": 10,
+    "maxConfigSchemaVersion": 4
+  },
+  "jira": {
+    "maxPagesPerSync": 10000,
+    "maxItemsPerSync": 500000,
+    "maxBytesPerSync": 536870912,
+    "maxActivityPages": 1000,
+    "maxActivityItems": 100000,
+    "maxActivityBytes": 134217728,
+    "maxMetadataPages": 1000,
+    "maxMetadataItems": 100000,
+    "maxMetadataBytes": 134217728
+  },
+  "epicReport": {
+    "pageSize": 50,
+    "maxGroups": 10000
+  }
+}

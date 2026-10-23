@@ -13,7 +13,7 @@ const database = require('../electron/database.cjs');
 const { calculateMetrics, compactMetricsForCache, publicSnapshot } = require('../electron/metrics.cjs');
 const { getBusinessSprintReport, listBusinessSprints } = require('../electron/business-sprint.cjs');
 const { getBusinessBoardReport, getCalendarPeriodReport, getDataGeneration, getIssueActivity, getIssueFilterOptions,
-  getIssueOverviewStats, getMetricsGeneration, getCachedMetrics, getConfig, listIssues, listRecords, openDatabase, saveConfig,
+  getIssueOverviewStats, getMetricsGeneration, getCachedMetrics, getConfig, listIssues, getEpicReport, listRecords, openDatabase, saveConfig,
   saveIssue, saveLocalIssueLink, saveRecordRelationship, listRecordRelationships, archiveRecordRelationship, saveSprint } = database;
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'axiloom-data-access-'));
@@ -99,6 +99,7 @@ async function main() {
       { semanticKey: 'storyPoints', providerFieldId: 'customfield_7301', projectKey: 'BUILD', transform: 'number' },
       { semanticKey: 'epicLink', providerFieldId: 'customfield_7302', projectKey: 'BUILD', transform: 'text' },
       { semanticKey: 'sprint', providerFieldId: 'customfield_7303', projectKey: 'BUILD', transform: 'id-list' },
+      { semanticKey: 'issueTags', providerFieldId: 'labels', projectKey: 'BUILD', transform: 'option-label' },
     ],
     workflows: {
       intake: { startedStatuses: ['In Progress'], completedStatuses: ['Accepted'] },
@@ -287,6 +288,30 @@ async function main() {
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, 10);
   assert.ok(db.prepare('PRAGMA table_info(business_issue_cache)').all().some((column) => column.name === 'issue_type_name'));
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM business_issue_cache').get().count, 4);
+  let expectedEpicPoints = 0;
+  for (let index = 0; index < 520; index += 1) {
+    const points = index % 5 + 1;
+    const child = issue(10000 + index, `BUILD-${1000 + index}`, 'BUILD', index % 2 === 0 ? 'Shipped' : 'In Progress', `Epic child ${index}`, index % 2 ? ['Core'] : [], 'owner');
+    child.fields.customfield_7301 = points;
+    child.fields.customfield_7302 = 'BUILD-900';
+    child.fields.labels = index % 10 === 0 ? ['ad hoc'] : [];
+    expectedEpicPoints += points;
+    saveIssue(db, child, 'synthetic-epic.json', null);
+  }
+  const epicPageOne = getEpicReport(db, { epic: 'BUILD-900', adhocTag: 'ad hoc', offset: 0, limit: 50 });
+  const epicPageTwo = getEpicReport(db, { epic: 'BUILD-900', adhocTag: 'ad hoc', offset: 50, limit: 50 });
+  assert.equal(epicPageOne.total, 520);
+  assert.equal(epicPageOne.items.length, 50);
+  assert.equal(epicPageOne.hasMore, true);
+  assert.equal(epicPageTwo.items.length, 50);
+  assert.equal(epicPageTwo.hasMore, true);
+  assert.equal(epicPageOne.summary.total, 520, 'Epic summaries aggregate all child rows while the renderer receives one bounded page');
+  assert.equal(epicPageOne.summary.done, 260);
+  assert.equal(epicPageOne.summary.totalSP, expectedEpicPoints);
+  assert.equal(epicPageOne.summary.adhocCount, 52);
+  assert.equal(epicPageOne.summary.adhocSP, 52);
+  assert.deepEqual(epicPageOne.projects.map((item) => [item.project, item.count]), [['BUILD', 520]]);
+  assert.ok(!epicPageOne.items.some((item) => epicPageTwo.items.some((later) => later.key === item.key)), 'server pages are complete and disjoint');
   db.close();
 
   const alternatePath = path.join(temporaryDirectory, 'alternate-profile.sqlite');

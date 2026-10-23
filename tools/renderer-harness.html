@@ -91,6 +91,30 @@
           created: '2026-02-01T00:00:00.000Z', updated: '2026-02-02T00:00:00.000Z', issueLinks: [],
           points: 5, epicLink: '', currentSprintIds: [], isDone: false,
         };
+        const epicIssueRows = Array.from({ length: 55 }, (_, index) => ({
+          ...syntheticIssue,
+          id: `synthetic-epic-issue-${index + 1}`,
+          key: `ALPHA-${200 + index}`,
+          summary: `Synthetic Epic issue ${index + 1}`,
+          epicLink: 'ALPHA-100',
+          points: index % 5 + 1,
+          tags: index % 10 === 0 ? ['Unplanned'] : [],
+          isDone: index % 2 === 0,
+        }));
+        const epicSummary = epicIssueRows.reduce((summary, issue) => {
+          const unplanned = issue.tags.includes('Unplanned');
+          summary.total += 1;
+          summary.done += Number(issue.isDone);
+          summary.totalSP += issue.points;
+          summary.doneSP += issue.isDone ? issue.points : 0;
+          summary.adhocCount += Number(unplanned);
+          summary.adhocDoneCount += Number(unplanned && issue.isDone);
+          summary.adhocSP += unplanned ? issue.points : 0;
+          summary.adhocDoneSP += unplanned && issue.isDone ? issue.points : 0;
+          return summary;
+        }, { total: 0, done: 0, totalSP: 0, doneSP: 0, adhocCount: 0, adhocDoneCount: 0, adhocSP: 0, adhocDoneSP: 0, withoutSP: 0 });
+        const epicProject = { project: 'ALPHA', count: epicSummary.total, done: epicSummary.done, points: epicSummary.totalSP, donePoints: epicSummary.doneSP, adhocCount: epicSummary.adhocCount, adhocPoints: epicSummary.adhocSP };
+        const epicTeam = { team: 'Synthetic Component', count: epicSummary.total, done: epicSummary.done, points: epicSummary.totalSP, donePoints: epicSummary.doneSP };
         snapshot.epics = [{ key: 'ALPHA-100', summary: 'Synthetic product epic', epicName: 'Synthetic product epic', project: 'ALPHA', status: 'In Progress', assignee: 'Synthetic Owner', childrenCount: 1, childrenDone: 0, childStoryPoints: 5, technicalProjects: ['ALPHA'], teamGroups: [{ teamId: 'synthetic-team', team: 'Synthetic Team', issueCount: 1 }], linkedProducts: [] }];
         const syntheticObjective = {
           id: 'synthetic-objective', kind: 'objective', title: 'Synthetic market objective',
@@ -132,7 +156,7 @@
           capacityHours: 20, utilization: 0.2, capacityEstimateReason: 'Person allocation defaults to 100%; no explicit override is configured.', medianCycleTimeDays: 4, estimateAccuracy: 0.75,
           storyPointCoverage: 1, timeDataCoverage: 1, estimateAccuracyCoverage: 1,
         }];
-        const smoke = { config, snapshot, syntheticIssue, issueExports: [], relationshipInputs: [], relationshipExports: 0, issueListRequests: [], importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };
+        const smoke = { config, snapshot, syntheticIssue, issueExports: [], relationshipInputs: [], relationshipExports: 0, issueListRequests: [], epicReportRequests: [], importCalls: 0, exportCalls: 0, saveCalls: 0, patListCalls: 0, revokeCalls: 0, forgetCalls: 0, syncCalls: 0, cancelCalls: 0, confirmations: [], jiraProgressHandler: null };
         const rememberIssueExport = (format, report) => {
           const rows = report?.sheets?.[0]?.rows || [];
           const workflowScope = smoke.issueListRequests.at(-1)?.workflowScope || '';
@@ -268,6 +292,13 @@
           getBusinessSprints: async () => [],
           getBusinessSprintReport: async () => ({ summary: {}, issues: [] }),
           getIssueFilterOptions: async () => ({ projects: ['ALPHA'], issueTypes: ['Story'], statuses: ['In Progress'], priorities: ['Medium'], assignees: ['Synthetic Owner'], components: ['Research'], epics: [{ key: 'ALPHA-100', summary: 'Synthetic product epic' }] }),
+          getEpicReport: async (filters = {}) => {
+            const limit = Math.max(1, Math.min(250, Number(filters.limit) || 50));
+            const offset = Math.max(0, Number(filters.offset) || 0);
+            smoke.epicReportRequests.push({ ...filters, offset, limit });
+            return { items: epicIssueRows.slice(offset, offset + limit), total: epicIssueRows.length, offset, limit, hasMore: offset + limit < epicIssueRows.length,
+              summary: { ...epicSummary }, projects: [{ ...epicProject }], teams: [{ ...epicTeam }] };
+          },
           onImportProgress: () => () => {},
           onJiraProgress: (callback) => { smoke.jiraProgressHandler = callback; return () => { smoke.jiraProgressHandler = null; }; },
           saveRecord: async ({ id, kind, title, payload }) => {

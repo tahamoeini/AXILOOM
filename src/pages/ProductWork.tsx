@@ -5,6 +5,7 @@ import type { AppConfig, ExportReport, PageId, ProductRecord, ProductRecordListR
 import BusinessOrgAnalytics from '../components/BusinessOrgAnalytics';
 import { DataTable, EmptyState, IssueKey, SectionHeading, StatusBadge, formatDate, formatNumber } from '../components/Primitives';
 import { createReportScope } from '../reporting';
+import resourceLimits from '../../shared/resource-limits.json';
 
 const PAGE_KIND: Partial<Record<PageId, RecordKind>> = { objectives: 'objective', requests: 'request', actions: 'action', decisions: 'decision', meetings: 'meeting', outcomes: 'outcome', stakeholders: 'stakeholder' };
 const PAGE_NAMES: Partial<Record<PageId, string>> = { objectives: 'هدف‌های محصول', requests: 'درخواست‌ها', actions: 'تعهدها و پیگیری‌ها', decisions: 'تصمیم‌های ثبت‌شده', meetings: 'جلسه‌ها و خروجی‌ها', outcomes: 'Outcomeها', stakeholders: 'ذی‌نفعان' };
@@ -32,6 +33,11 @@ function parseIcsDate(value: string, timezone = '', defaultTimeZone = 'UTC') {
 }
 
 function parseCalendar(text: string, defaultTimeZone = 'UTC') {
+  const limits = resourceLimits.imports;
+  if (new TextEncoder().encode(text).byteLength > limits.maxIcsBytes) throw new Error(`ICS files must be at most ${limits.maxIcsBytes / 1024 / 1024} MB.`);
+  const sourceLines = text.split(/\r?\n/);
+  if (sourceLines.length > limits.maxIcsEvents * 40 || sourceLines.some((line) => line.length > limits.maxIcsLineCharacters)) throw new Error('ICS file has too many lines or an oversized line.');
+  if ((text.match(/^BEGIN:VEVENT\s*$/gm) || []).length > limits.maxIcsEvents) throw new Error(`ICS files may contain at most ${limits.maxIcsEvents.toLocaleString()} events.`);
   const unfolded = text.replace(/\r?\n[ \t]/g, '');
   const lines = unfolded.split(/\r?\n/);
   const events: Array<Record<string, string>> = [];
@@ -171,10 +177,13 @@ export default function ProductWork({ page, snapshot, config, setConfig, jiraUrl
 
   async function importIcs(file: File | undefined) {
     if (!file) return;
+    if (file.size > resourceLimits.imports.maxIcsBytes) { notify(`ICS files must be at most ${resourceLimits.imports.maxIcsBytes / 1024 / 1024} MB.`); return; }
     setImporting(true);
     try {
       const events = parseCalendar(await file.text(), config?.organization.timeZone || 'UTC');
       if (!events.length) throw new Error('فایل ICS رویداد جلسه‌ای نداشت.');
+      if (events.length > resourceLimits.imports.maxIcsEvents) throw new Error(`ICS files may contain at most ${resourceLimits.imports.maxIcsEvents.toLocaleString()} events.`);
+      for (const event of events) if (new TextEncoder().encode(JSON.stringify(event)).byteLength > resourceLimits.imports.maxRecordBytes) throw new Error('One ICS event exceeds the product-record size limit.');
       for (const meeting of events) await window.axiloom.saveRecord(meeting);
       await refresh();
       notify(`${formatNumber(events.length, 0)} جلسه از فایل محلی ICS ثبت شد.`);
