@@ -1,11 +1,18 @@
 const { app, dialog } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 const resultPath = process.env.AXILOOM_SMOKE_RESULT;
 if (!resultPath || !process.env.PORTABLE_EXECUTABLE_DIR) throw new Error('Set AXILOOM_SMOKE_RESULT and an isolated PORTABLE_EXECUTABLE_DIR before running this test.');
 const timer = setTimeout(() => finish({ ok: false, error: 'Native smoke timed out' }), 30000);
 dialog.showSaveDialog = async (_window, options) => ({ canceled: false,
-  filePath: path.join(process.env.PORTABLE_EXECUTABLE_DIR, options.defaultPath) });
+  filePath: path.join(process.env.PORTABLE_EXECUTABLE_DIR, options.filters[0].extensions[0] === 'axw' ? 'native-smoke.axw' : options.defaultPath) });
+dialog.showOpenDialog = async () => ({ canceled: false,
+  filePaths: [path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'native-smoke.axw')] });
+let relaunchRequested = false;
+let quitRequested = false;
+app.relaunch = () => { relaunchRequested = true; };
+app.quit = () => { quitRequested = true; };
 function finish(result) {
   clearTimeout(timer);
   fs.writeFileSync(resultPath, JSON.stringify(result, null, 2));
@@ -36,7 +43,12 @@ app.on('web-contents-created', (_event, contents) => {
           sheets: [{ name: 'Evidence', rows: [['Title', 'Count'], ['Synthetic objective', 1]] }] };
         const xlsx = await window.axiloom.exportXlsx(report);
         const pdf = await window.axiloom.exportPdf(report);
+        const backup = await window.axiloom.backup();
+        const later = await window.axiloom.saveRecord({ kind: 'objective', title: 'Synthetic record after backup', payload: {} });
+        const restore = await window.axiloom.restore();
+        if (!restore.restored) throw new Error('Restore did not finish');
         return { ok: true, workspaceId: workspace.id, databasePath: workspace.path,
+          backupPath: backup.filePath, laterRecordId: later.id,
           xlsxPath: xlsx.filePath, pdfPath: pdf.filePath,
           recordId: record.id, isolatedWorkspaceId: second.id, recordPersistenceVerified: true,
           configRevision: config.configurationRevision, snapshotKeys: Object.keys(snapshot),
@@ -46,7 +58,19 @@ app.on('web-contents-created', (_event, contents) => {
       const pdf = fs.readFileSync(result.pdfPath);
       if (xlsx.subarray(0, 2).toString() !== 'PK' || xlsx.length < 1000) throw new Error('Invalid XLSX output');
       if (pdf.subarray(0, 5).toString() !== '%PDF-' || pdf.length < 1000) throw new Error('Invalid PDF output');
-      finish({ ...result, xlsxBytes: xlsx.length, pdfBytes: pdf.length });
+      if (!relaunchRequested || !quitRequested) throw new Error('Restore did not request restart');
+      const restored = new DatabaseSync(result.databasePath, { readOnly: true });
+      try {
+        if (!restored.prepare('SELECT id FROM product_records WHERE id=?').get(result.recordId)) throw new Error('Backup record missing after restore');
+        if (restored.prepare('SELECT id FROM product_records WHERE id=?').get(result.laterRecordId)) throw new Error('Post-backup record survived restore');
+      } finally { restored.close(); }
+      const recoveryName = fs.readdirSync(path.dirname(result.databasePath)).find(name => name.startsWith('workspace.pre-restore-') && name.endsWith('.sqlite'));
+      if (!recoveryName) throw new Error('Recovery database missing');
+      const recovery = new DatabaseSync(path.join(path.dirname(result.databasePath), recoveryName), { readOnly: true });
+      try {
+        if (!recovery.prepare('SELECT id FROM product_records WHERE id=?').get(result.laterRecordId)) throw new Error('Pre-restore record missing from recovery database');
+      } finally { recovery.close(); }
+      finish({ ...result, backupRestoreVerified: true, xlsxBytes: xlsx.length, pdfBytes: pdf.length });
     } catch (error) { finish({ ok: false, error: error.stack }); }
   });
 });
