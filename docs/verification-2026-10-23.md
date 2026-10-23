@@ -34,3 +34,7 @@ The entry-file inspection above was insufficient: both packagers omitted shared 
 Rebuilt Windows portable successfully and passed the packaged module load check. macOS script syntax passed; macOS packaging and native UI launch remain unverified. The replacement ZIP SHA-256 is 67178d9fa2a055a3f631d813f8a1ed2ff46928f85491d5a22a866d3699e32aad, superseding the earlier archive hash.
 
 Both package builders now invoke the dependency verifier before archive creation, including direct local builds. The Windows build exercised this embedded check successfully. The release path filter includes verifier changes. A packaged Electron invocation in run-as-Node mode returned no captured output and is not accepted as native runtime verification.
+
+## Backup/restore dialog workspace isolation
+
+Backup and restore previously used the active database after awaiting native file selection, allowing a workspace switch during the dialog to change the operation's target. Both handlers now capture the starting database and reject a changed target immediately after selection; restore also checks it before replacement. The new VM regression executes the actual handler definitions with dialogs that switch workspaces and proves rejection before filesystem/worker access. It is included in test:workspaces. Handler syntax, this regression, and existing workspace tests passed; native dialog UI behavior remains unverified. Existing local release artifacts predate this fix and must be rebuilt before distribution.

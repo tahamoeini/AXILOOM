@@ -17,7 +17,7 @@
     "test:setup": "node tools/test-setup-checklist.mjs",
     "benchmark:workspace": "node --expose-gc tools/benchmark-large-workspace.mjs",
     "test:providers": "node tools/test-jira-providers.mjs",
-    "test:workspaces": "node tools/test-workspaces.mjs",
+    "test:workspaces": "node tools/test-workspaces.mjs && node tools/test-workspace-dialogs.mjs",
     "test:migration": "node tools/test-workspace-migration.mjs",
     "migrate:workspace": "node tools/migrate-workspace.mjs",
     "build:portable": "npm run build && node tools/build-portable.mjs",

@@ -626,9 +626,11 @@ function registerHandlers() {
 
   ipcMain.handle('workspace:backup', async () => {
     assertWorkspacePaths();
+    const requestedDatabase = databaseFile;
     if (activeImportRun || syncWorker || workspaceBackupInProgress) throw new Error('هنگام import یا همگام‌سازی Jira پشتیبان نگیرید؛ پس از پایان دوباره تلاش کنید.');
     const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, { title: 'پشتیبان فضای Axiloom', defaultPath: `Axiloom-${new Date().toISOString().slice(0, 10)}.axw`, filters: [{ name: 'Axiloom Workspace', extensions: ['axw'] }] });
     if (canceled || !filePath) return { canceled: true };
+    if (databaseFile !== requestedDatabase) throw new Error('The active workspace changed while selecting the backup destination. Start backup again.');
     if (path.resolve(filePath) === path.resolve(databaseFile)) throw new Error('مسیر فایل پشتیبان باید با فایل فضای کاری محلی متفاوت باشد.');
     if (activeImportRun || syncWorker || workspaceBackupInProgress) throw new Error('یک import یا همگام‌سازی در این فاصله آغاز شد؛ پس از پایان دوباره تلاش کنید.');
     workspaceBackupInProgress = true;
@@ -655,10 +657,12 @@ function registerHandlers() {
   });
   ipcMain.handle('workspace:restore', async () => {
     assertWorkspacePaths();
+    const requestedDatabase = databaseFile;
     const busy = () => workspaceMaintenance || activeImportRun || syncWorker || workspaceBackupInProgress || workspaceBackupWorkers.size || snapshotWorkers.size || snapshotFlights.size || dataAccessWorkers.size || dataAccessQueue.length;
     if (busy()) throw new Error('برای بازیابی، صبر کنید تا import، همگام‌سازی و خواندن داده‌ها تمام شود.');
     const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, { title: 'بازیابی فضای Axiloom', properties: ['openFile'], filters: [{ name: 'Axiloom Workspace', extensions: ['axw', 'sqlite', 'db'] }] });
     if (canceled || !filePaths[0]) return { canceled: true };
+    if (databaseFile !== requestedDatabase) throw new Error('The active workspace changed while selecting the restore source. Start restore again.');
     const selectedSource = filePaths[0];
     const source = fs.realpathSync(selectedSource);
     const sourceStats = fs.statSync(source);
@@ -678,7 +682,7 @@ function registerHandlers() {
       for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${tempPath}${suffix}`, { force: true });
       throw error;
     }
-    if (busy()) {
+    if (busy() || databaseFile !== requestedDatabase) {
       for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${tempPath}${suffix}`, { force: true });
       throw new Error('در این فاصله یک عملیات خواندن یا نوشتن آغاز شد؛ فضای فعلی بدون تغییر باقی ماند.');
     }
